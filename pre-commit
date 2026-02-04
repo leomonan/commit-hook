@@ -6,7 +6,7 @@
 
 set -e
 
-# 钩子脚本所在目录（支持独立项目 commit-hooks 或仓库内 scripts/hooks）
+# 钩子脚本所在目录（支持独立项目或仓库内 commit-hooks）
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 GIT_ROOT="$(git rev-parse --show-toplevel)"
 

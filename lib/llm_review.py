@@ -322,7 +322,7 @@ def _format_raw_response(obj, max_len: int = 4000) -> str:
 
 
 def _get_repo_root() -> Path:
-    """Git 仓库根目录（支持独立项目 commit-hooks 或仓库内 scripts/hooks）"""
+    """Git 仓库根目录（支持独立项目或仓库内 commit-hooks）"""
     r = subprocess.run(
         ["git", "rev-parse", "--show-toplevel"],
         capture_output=True,
