@@ -628,8 +628,8 @@ async def _async_llm_review(diff: str) -> Optional[dict]:
         # 1. 构造 prompt（仅依赖 diff），用于缓存 key 与 API 请求
         prompt = _build_prompt(diff)
         # 2. 查缓存：输入 hash 命中则直接返回，避免重复调用 LLM
-        # 如果设置了 AUTOMANUS_LLM_REVIEW_FORCE=1，则跳过缓存
-        force_refresh = os.environ.get("AUTOMANUS_LLM_REVIEW_FORCE", "").lower() in (
+        # 如果设置了 COMMIT_HOOKS_LLM_REVIEW_FORCE=1，则跳过缓存
+        force_refresh = os.environ.get("COMMIT_HOOKS_LLM_REVIEW_FORCE", "").lower() in (
             "1",
             "true",
             "yes",
@@ -639,7 +639,7 @@ async def _async_llm_review(diff: str) -> Optional[dict]:
         if not force_refresh and h in cache:
             print(f"{YELLOW}[LLM Review]{NC} 分析中... 命中缓存")
             print(
-                f"{YELLOW}提示：{NC}使用 AUTOMANUS_LLM_REVIEW_FORCE=1 git commit 可强制刷新（跳过缓存）"
+                f"{YELLOW}提示：{NC}使用 COMMIT_HOOKS_LLM_REVIEW_FORCE=1 git commit 可强制刷新（跳过缓存）"
             )
             return cache[h]
         if force_refresh:
@@ -723,7 +723,7 @@ async def _async_llm_review(diff: str) -> Optional[dict]:
 
         print(f"{YELLOW}[LLM Review]{NC} 分析中... 检视模型: {provider_name} / {model}")
 
-        if os.environ.get("AUTOMANUS_LLM_REVIEW_PRINT_PROMPT", "").lower() in (
+        if os.environ.get("COMMIT_HOOKS_LLM_REVIEW_PRINT_PROMPT", "").lower() in (
             "1",
             "true",
             "yes",
@@ -878,7 +878,7 @@ def _handle_error(tag: str, message: str, hint_extra: str = "") -> int:
         print(f"{RED}{message}{NC}")
     print()
     print(f"{RED}[LLM Review]{NC} 提交已阻断")
-    base = "使用 AUTOMANUS_NO_REVIEW=1 git commit 可跳过 LLM Review"
+    base = "使用 COMMIT_HOOKS_NO_REVIEW=1 git commit 可跳过 LLM Review"
     hint = f"{hint_extra}；或{base}" if hint_extra else base
     print(f"{YELLOW}提示：{NC}{hint}")
     return 1
@@ -1019,7 +1019,7 @@ def main() -> int:
     if certain_issues:
         print(f"{RED}[LLM Review]{NC} 检测到确定违反设计原则的问题，提交已被阻断")
         print(
-            f"{YELLOW}提示：{NC}请根据上述问题修改代码后重新提交；如需在特殊场景下临时跳过审查，可使用环境变量 AUTOMANUS_NO_REVIEW=1"
+            f"{YELLOW}提示：{NC}请根据上述问题修改代码后重新提交；如需在特殊场景下临时跳过审查，可使用环境变量 COMMIT_HOOKS_NO_REVIEW=1"
         )
         return 1
 

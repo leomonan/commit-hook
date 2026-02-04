@@ -65,8 +65,8 @@ prompt_install() {
     # install_cmd 参数已移除（未使用，修复 SC2034）
     
     # 非交互式环境（CI、管道等）或已设置环境变量：跳过询问
-    if [[ ! -t 0 ]] || [[ "${AUTOMANUS_INSTALL_DEPS:-}" == "1" ]] || [[ "${AUTOMANUS_INSTALL_DEPS:-}" == "0" ]]; then
-        if [[ "${AUTOMANUS_INSTALL_DEPS:-}" == "1" ]]; then
+    if [[ ! -t 0 ]] || [[ "${COMMIT_HOOKS_INSTALL_DEPS:-}" == "1" ]] || [[ "${COMMIT_HOOKS_INSTALL_DEPS:-}" == "0" ]]; then
+        if [[ "${COMMIT_HOOKS_INSTALL_DEPS:-}" == "1" ]]; then
             return 0  # 自动安装
         else
             return 1  # 不安装
@@ -85,7 +85,7 @@ prompt_install() {
 # 检查 black
 if ! ${PYTHON_CMD} -m black --version >/dev/null 2>&1; then
     should_install=0
-    if [[ "${AUTOMANUS_INSTALL_DEPS:-}" == "1" ]] || prompt_install "black" "pip install black"; then
+    if [[ "${COMMIT_HOOKS_INSTALL_DEPS:-}" == "1" ]] || prompt_install "black" "pip install black"; then
         should_install=1
     fi
     
@@ -115,7 +115,7 @@ fi
 # 检查 shellcheck
 if ! command -v shellcheck &> /dev/null; then
     should_install=0
-    if [[ "${AUTOMANUS_INSTALL_DEPS:-}" == "1" ]] || prompt_install "shellcheck" "brew install shellcheck"; then
+    if [[ "${COMMIT_HOOKS_INSTALL_DEPS:-}" == "1" ]] || prompt_install "shellcheck" "brew install shellcheck"; then
         should_install=1
     fi
     
@@ -168,10 +168,10 @@ fi
 echo ""
 echo "使用说明:"
 echo "  - 钩子将在每次 git commit 时自动执行"
-echo "  - 使用 AUTOMANUS_NO_REVIEW=1 git commit 跳过 LLM Review"
+echo "  - 使用 COMMIT_HOOKS_NO_REVIEW=1 git commit 跳过 LLM Review"
 echo "  - 使用 git commit --no-verify 跳过所有钩子（紧急情况）"
 echo ""
 echo "可选依赖安装:"
 echo "  - 交互式安装: 直接运行脚本，会询问是否安装"
-echo "  - 自动安装: AUTOMANUS_INSTALL_DEPS=1 scripts/hooks/install.sh"
-echo "  - 跳过询问: AUTOMANUS_INSTALL_DEPS=0 scripts/hooks/install.sh"
+echo "  - 自动安装: COMMIT_HOOKS_INSTALL_DEPS=1 scripts/hooks/install.sh"
+echo "  - 跳过询问: COMMIT_HOOKS_INSTALL_DEPS=0 scripts/hooks/install.sh"

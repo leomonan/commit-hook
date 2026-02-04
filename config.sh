@@ -54,4 +54,4 @@ PYTHON_HEADER_REQUIRED_FIELDS=(
 # ============================================================
 # 注意：LLM 超时配置以 automanus.llm.toml 中的 provider.timeout 为准
 # LLM_REVIEW_TIMEOUT=30  # 已废弃，不再使用
-# 通过 AUTOMANUS_NO_REVIEW=1 环境变量关闭
+# 通过 COMMIT_HOOKS_NO_REVIEW=1 环境变量关闭

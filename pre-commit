@@ -23,42 +23,42 @@ NC='\033[0m'
 
 # 打印 hook 参数帮助提示
 print_hooks_help_hint() {
-    echo -e "${YELLOW}提示：${NC}AUTOMANUS_HOOKS_HELP=1 git commit 可查看所有 hook 参数用法"
+    echo -e "${YELLOW}提示：${NC}COMMIT_HOOKS_HELP=1 git commit 可查看所有 hook 参数用法"
 }
 
 # 打印 hook 参数帮助后退出（不执行检查、不提交）
-case "$(echo "${AUTOMANUS_HOOKS_HELP:-}" | tr 'A-Z' 'a-z')" in
+case "$(echo "${COMMIT_HOOKS_HELP:-}" | tr 'A-Z' 'a-z')" in
     1|true|yes)
         echo "Git Commit Hooks 环境变量"
         echo ""
-        echo "  AUTOMANUS_NO_REVIEW=1"
-        echo "    跳过 LLM Review。示例: AUTOMANUS_NO_REVIEW=1 git commit -m \"feat: xxx\""
+        echo "  COMMIT_HOOKS_NO_REVIEW=1"
+        echo "    跳过 LLM Review。示例: COMMIT_HOOKS_NO_REVIEW=1 git commit -m \"feat: xxx\""
         echo ""
-        echo "  AUTOMANUS_LLM_REVIEW_FORCE=1|true|yes"
-        echo "    强制 LLM Review（跳过缓存）。示例: AUTOMANUS_LLM_REVIEW_FORCE=1 git commit -m \"feat: xxx\""
+        echo "  COMMIT_HOOKS_LLM_REVIEW_FORCE=1|true|yes"
+        echo "    强制 LLM Review（跳过缓存）。示例: COMMIT_HOOKS_LLM_REVIEW_FORCE=1 git commit -m \"feat: xxx\""
         echo ""
-        echo "  AUTOMANUS_LLM_REVIEW_PRINT_PROMPT=1|true|yes"
+        echo "  COMMIT_HOOKS_LLM_REVIEW_PRINT_PROMPT=1|true|yes"
         echo "    打印 LLM Review 完整提示词（调试用）。"
         echo ""
-        echo "  AUTOMANUS_HOOKS_HELP=1|true|yes"
+        echo "  COMMIT_HOOKS_HELP=1|true|yes"
         echo "    打印本帮助并退出，不执行提交。"
         echo ""
-        echo "  AUTOMANUS_INTERACTIVE=1|true|yes"
-        echo "    启用交互模式，每个检查步骤前询问是否执行。示例: AUTOMANUS_INTERACTIVE=1 git commit -m \"feat: xxx\""
+        echo "  COMMIT_HOOKS_INTERACTIVE=1|true|yes"
+        echo "    启用交互模式，每个检查步骤前询问是否执行。示例: COMMIT_HOOKS_INTERACTIVE=1 git commit -m \"feat: xxx\""
         echo ""
         echo "  git commit --no-verify"
         echo "    跳过所有 hooks（含 pre-commit、commit-msg）。"
         echo ""
-        echo -e "${YELLOW}此次仅显示帮助，未执行提交。移除 AUTOMANUS_HOOKS_HELP 即可正常提交。${NC}"
+        echo -e "${YELLOW}此次仅显示帮助，未执行提交。移除 COMMIT_HOOKS_HELP 即可正常提交。${NC}"
         exit 1
         ;;
 esac
 
 echo -e "${GREEN}[pre-commit]${NC} 开始检查..."
 
-# 检测交互模式（默认关闭；仅当显式设置 AUTOMANUS_INTERACTIVE=1/true/yes 才启用）
+# 检测交互模式（默认关闭；仅当显式设置 COMMIT_HOOKS_INTERACTIVE=1/true/yes 才启用）
 INTERACTIVE_MODE=false
-case "$(echo "${AUTOMANUS_INTERACTIVE:-}" | tr 'A-Z' 'a-z')" in
+case "$(echo "${COMMIT_HOOKS_INTERACTIVE:-}" | tr 'A-Z' 'a-z')" in
     1|true|yes)
         INTERACTIVE_MODE=true
         ;;

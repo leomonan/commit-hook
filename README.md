@@ -33,7 +33,7 @@ bash /path/to/commit-hooks/install.sh
 自动安装可选依赖：
 
 ```bash
-AUTOMANUS_INSTALL_DEPS=1 bash commit-hooks/install.sh
+COMMIT_HOOKS_INSTALL_DEPS=1 bash commit-hooks/install.sh
 ```
 
 ## 卸载
@@ -70,11 +70,11 @@ LLM Review 缓存默认：`~/.cache/commit-hooks/llm_review`。可通过环境�
 
 | 变量 | 说明 |
 |------|------|
-| `AUTOMANUS_NO_REVIEW=1` | 跳过 LLM Review |
-| `AUTOMANUS_LLM_REVIEW_FORCE=1` | 强制 LLM Review（跳过缓存） |
-| `AUTOMANUS_LLM_REVIEW_PRINT_PROMPT=1` | 打印 LLM 提示词（调试） |
-| `AUTOMANUS_HOOKS_HELP=1` | 打印帮助并退出，不提交 |
-| `AUTOMANUS_INTERACTIVE=1` | 每步前询问是否执行检查 |
+| `COMMIT_HOOKS_NO_REVIEW=1` | 跳过 LLM Review |
+| `COMMIT_HOOKS_LLM_REVIEW_FORCE=1` | 强制 LLM Review（跳过缓存） |
+| `COMMIT_HOOKS_LLM_REVIEW_PRINT_PROMPT=1` | 打印 LLM 提示词（调试） |
+| `COMMIT_HOOKS_HELP=1` | 打印帮助并退出，不提交 |
+| `COMMIT_HOOKS_INTERACTIVE=1` | 每步前询问是否执行检查 |
 | `COMMIT_HOOKS_LLM_CONFIG` | LLM 配置文件路径 |
 | `COMMIT_HOOKS_CACHE_DIR` | LLM 缓存目录 |
 

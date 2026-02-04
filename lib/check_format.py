@@ -33,10 +33,10 @@ def _env_false(key: str) -> bool:
 
 def _is_interactive() -> bool:
     # black 自动修复的交互确认：默认开启（只要有 TTY）
-    # 显式关闭：AUTOMANUS_BLACK_AUTOFIX=0/false/no
-    if _env_false("AUTOMANUS_BLACK_AUTOFIX"):
+    # 显式关闭：COMMIT_HOOKS_BLACK_AUTOFIX=0/false/no
+    if _env_false("COMMIT_HOOKS_BLACK_AUTOFIX"):
         return False
-    if _env_true("AUTOMANUS_BLACK_AUTOFIX"):
+    if _env_true("COMMIT_HOOKS_BLACK_AUTOFIX"):
         return True
     try:
         return os.path.exists("/dev/tty")

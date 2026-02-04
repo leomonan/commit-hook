@@ -20,7 +20,7 @@ NC='\033[0m'
 
 # 打印 hook 参数帮助提示
 print_hooks_help_hint() {
-    echo -e "${YELLOW}提示：${NC}AUTOMANUS_HOOKS_HELP=1 git commit 可查看所有 hook 参数用法"
+    echo -e "${YELLOW}提示：${NC}COMMIT_HOOKS_HELP=1 git commit 可查看所有 hook 参数用法"
 }
 
 COMMIT_MSG_FILE="$1"
@@ -42,7 +42,7 @@ if [[ "$COMMIT_MSG" =~ ^Merge ]]; then
     exit 0
 fi
 
-# LLM Review（失败则阻断；AUTOMANUS_NO_REVIEW=1 可跳过）
+# LLM Review（失败则阻断；COMMIT_HOOKS_NO_REVIEW=1 可跳过）
 # 检测并使用项目虚拟环境（与 install.sh 保持一致）
 PYTHON_CMD="python3"
 if [[ -f "${GIT_ROOT}/.venv/bin/python" ]]; then
@@ -51,7 +51,7 @@ fi
 
 # 检测交互模式
 INTERACTIVE_MODE=false
-case "$(echo "${AUTOMANUS_INTERACTIVE:-}" | tr 'A-Z' 'a-z')" in
+case "$(echo "${COMMIT_HOOKS_INTERACTIVE:-}" | tr 'A-Z' 'a-z')" in
     1|true|yes)
         INTERACTIVE_MODE=true
         ;;
@@ -77,12 +77,12 @@ ask_continue() {
     return 0
 }
 
-if [[ -z "${AUTOMANUS_NO_REVIEW}" ]]; then
+if [[ -z "${COMMIT_HOOKS_NO_REVIEW}" ]]; then
     if ask_continue "LLM Review"; then
         ${PYTHON_CMD} "${SCRIPT_DIR}/lib/llm_review.py" || { print_hooks_help_hint; exit 1; }
     fi
 else
-    echo -e "${YELLOW}[commit-msg]${NC} LLM Review 已跳过（AUTOMANUS_NO_REVIEW=${AUTOMANUS_NO_REVIEW}）"
+    echo -e "${YELLOW}[commit-msg]${NC} LLM Review 已跳过（COMMIT_HOOKS_NO_REVIEW=${COMMIT_HOOKS_NO_REVIEW}）"
 fi
 
 # 校验格式

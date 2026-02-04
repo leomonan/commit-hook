@@ -866,7 +866,7 @@ def main() -> int:
         can_fix_last = bool(last_updated_violations)
         can_fix_new = bool(new_file_violations)
         interactive_disabled = os.environ.get(
-            "AUTOMANUS_HEADER_NO_INTERACTIVE", ""
+            "COMMIT_HOOKS_HEADER_NO_INTERACTIVE", ""
         ).lower() in ("1", "true", "yes")
 
         # 尝试获取 TTY
@@ -895,7 +895,7 @@ def main() -> int:
             if response in ("", "y", "yes"):
                 # 调用自身的修复模式
                 env = dict(os.environ)
-                env["AUTOMANUS_HEADER_NO_INTERACTIVE"] = "1"
+                env["COMMIT_HOOKS_HEADER_NO_INTERACTIVE"] = "1"
                 cmd = [sys.executable, __file__, "--fix-last-updated"]
                 result = subprocess.run(cmd, text=True, env=env, check=False)
                 if result.returncode != 0:
@@ -971,7 +971,7 @@ def main() -> int:
         # 如果实际进行了任何修复，重新检查一次
         if (did_fix_last or did_fix_new) and not interactive_disabled:
             env = dict(os.environ)
-            env["AUTOMANUS_HEADER_NO_INTERACTIVE"] = "1"
+            env["COMMIT_HOOKS_HEADER_NO_INTERACTIVE"] = "1"
             recheck = subprocess.run(
                 [sys.executable, __file__],
                 text=True,
