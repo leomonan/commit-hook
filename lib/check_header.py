@@ -101,10 +101,12 @@ def get_staged_source_files(status_filters: str) -> list[str]:
         return []
     files = result.stdout.strip().split("\n")
     # 受支持后缀 + 无扩展名（在解析阶段基于内容再决定是否真正检查）
+    # 跳过目录（如子模块路径 commit-hooks），避免 Is a directory 错误
     return [
         f
         for f in files
-        if any(f.endswith(ext) for ext in SUPPORTED_EXTS) or Path(f).suffix == ""
+        if (any(f.endswith(ext) for ext in SUPPORTED_EXTS) or Path(f).suffix == "")
+        and not Path(f).is_dir()
     ]
 
 
