@@ -1,0 +1,130 @@
+#!/bin/bash
+# 文件名: commit-msg
+# 描述: commit message 格式校验钩子
+# 创建日期: 2026年01月25日 15:32:00
+# 最后更新日期: 2026年01月29日 17:56:44
+
+set -e
+
+# 钩子脚本所在目录（支持独立项目 commit-hooks 或仓库内 scripts/hooks）
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+GIT_ROOT="$(git rev-parse --show-toplevel)"
+
+source "${SCRIPT_DIR}/config.sh"
+
+# 颜色定义
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+# 打印 hook 参数帮助提示
+print_hooks_help_hint() {
+    echo -e "${YELLOW}提示：${NC}AUTOMANUS_HOOKS_HELP=1 git commit 可查看所有 hook 参数用法"
+}
+
+COMMIT_MSG_FILE="$1"
+COMMIT_MSG=$(cat "$COMMIT_MSG_FILE")
+
+# LLM Review 建议 commit message 文件路径（使用 git-dir 以兼容 worktree）
+LLM_SUGGEST_FILE_NAME="llm_review_suggestion.txt"
+GIT_DIR="$(git rev-parse --git-dir 2>/dev/null || echo "")"
+if [[ -n "$GIT_DIR" ]]; then
+    LLM_SUGGEST_FILE="${GIT_DIR}/${LLM_SUGGEST_FILE_NAME}"
+else
+    LLM_SUGGEST_FILE=""
+fi
+
+# 跳过 merge commit
+if [[ "$COMMIT_MSG" =~ ^Merge ]]; then
+    # Merge commit 跳过时也打印提示（SSOT：统一由 commit-msg 打印）
+    print_hooks_help_hint
+    exit 0
+fi
+
+# LLM Review（失败则阻断；AUTOMANUS_NO_REVIEW=1 可跳过）
+# 检测并使用项目虚拟环境（与 install.sh 保持一致）
+PYTHON_CMD="python3"
+if [[ -f "${GIT_ROOT}/.venv/bin/python" ]]; then
+    PYTHON_CMD="${GIT_ROOT}/.venv/bin/python"
+fi
+
+# 检测交互模式
+INTERACTIVE_MODE=false
+case "$(echo "${AUTOMANUS_INTERACTIVE:-}" | tr 'A-Z' 'a-z')" in
+    1|true|yes)
+        INTERACTIVE_MODE=true
+        ;;
+esac
+
+# 交互式询问函数
+ask_continue() {
+    local check_name="$1"
+    if [[ "$INTERACTIVE_MODE" == "true" ]]; then
+        echo ""
+        echo -e "${YELLOW}是否执行检查: ${check_name}?${NC} [Y/n] "
+        read -r response < /dev/tty 2>/dev/null || response="y"
+        case "$(echo "$response" | tr 'A-Z' 'a-z')" in
+            n|no)
+                echo -e "${YELLOW}[commit-msg]${NC} 已跳过: ${check_name}"
+                return 1
+                ;;
+            *)
+                return 0
+                ;;
+        esac
+    fi
+    return 0
+}
+
+if [[ -z "${AUTOMANUS_NO_REVIEW}" ]]; then
+    if ask_continue "LLM Review"; then
+        ${PYTHON_CMD} "${SCRIPT_DIR}/lib/llm_review.py" || { print_hooks_help_hint; exit 1; }
+    fi
+else
+    echo -e "${YELLOW}[commit-msg]${NC} LLM Review 已跳过（AUTOMANUS_NO_REVIEW=${AUTOMANUS_NO_REVIEW}）"
+fi
+
+# 校验格式
+if ! echo "$COMMIT_MSG" | grep -qE "$COMMIT_MSG_PATTERN"; then
+    echo -e "${RED}[commit-msg] 错误: commit message 格式不正确${NC}"
+    echo "            正确格式: <type>(<scope>): <subject>"
+    #  echo ""
+    #  echo "Type 类型:"
+    #  echo "  feat     - 新增功能"
+    #  echo "  fix      - 缺陷修复"
+    #  echo "  refactor - 重构"
+    #  echo "  docs     - 文档变更"
+    #  echo "  test     - 测试"
+    #  echo "  chore    - 日常维护"
+    #  echo "  perf     - 性能优化"
+    #  echo "  build    - 构建/CI"
+    #  echo "  style    - 代码风格"
+    #  echo "  revert   - 回滚"
+    #  echo ""
+    #  echo "示例:"
+    #  echo "  feat(server): add health check endpoint"
+    #  echo "  fix(auth): resolve token expiration issue"
+    #  echo ""
+    #  echo "您的 commit message:"
+    #  echo "        $COMMIT_MSG"
+    #  echo ""
+    # 如果存在 LLM Review 建议的 commit message，则在此处展示，帮助用户快速修正
+    if [[ -n "$LLM_SUGGEST_FILE" && -f "$LLM_SUGGEST_FILE" ]]; then
+        SUGGEST_MSG="$(cat "$LLM_SUGGEST_FILE" | head -1 | tr -d '\r\n')"
+        if [[ -n "$SUGGEST_MSG" ]]; then
+            echo ""
+            echo "[LLM Review] 建议 commit:"
+            echo ""
+            echo "        $SUGGEST_MSG"
+            echo ""
+        fi
+    fi
+    echo -e "${RED}提示：${NC}修复格式后重新提交，或使用 git commit --no-verify 跳过所有检查"
+    print_hooks_help_hint
+    exit 1
+fi
+
+echo -e "${GREEN}[commit-msg]${NC} 格式校验通过"
+print_hooks_help_hint
+exit 0
