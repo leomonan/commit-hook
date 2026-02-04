@@ -2,7 +2,7 @@
 # 文件名: install.sh
 # 描述: Git 钩子安装脚本 
 # 创建日期: 2026年01月25日 15:32:00
-# 最后更新日期: 2026年01月27日 02:14:14
+# 最后更新日期: 2026年02月04日 23:29:27
 
 set -e
 
@@ -23,7 +23,7 @@ fi
 
 echo "安装 Git 钩子..."
 
-# 优先使用 core.hooksPath：指向本脚本所在目录（支持独立项目或仓库内 commit-hooks）
+# 优先使用 core.hooksPath：指向本脚本所在目录（支持 commit-hooks 或 scripts/hooks）
 if git config --local core.hooksPath "${SCRIPT_DIR}" 2>/dev/null; then
     # Git 要求 core.hooksPath 下的钩子具备可执行位，否则会忽略并 hint
     chmod +x "${SCRIPT_DIR}/pre-commit" "${SCRIPT_DIR}/commit-msg" 2>/dev/null || true
@@ -173,5 +173,5 @@ echo "  - 使用 git commit --no-verify 跳过所有钩子（紧急情况）"
 echo ""
 echo "可选依赖安装:"
 echo "  - 交互式安装: 直接运行脚本，会询问是否安装"
-echo "  - 自动安装: COMMIT_HOOKS_INSTALL_DEPS=1 commit-hooks/install.sh"
-echo "  - 跳过询问: COMMIT_HOOKS_INSTALL_DEPS=0 commit-hooks/install.sh"
+echo "  - 自动安装: COMMIT_HOOKS_INSTALL_DEPS=1 scripts/hooks/install.sh"
+echo "  - 跳过询问: COMMIT_HOOKS_INSTALL_DEPS=0 scripts/hooks/install.sh"

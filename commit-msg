@@ -2,11 +2,11 @@
 # 文件名: commit-msg
 # 描述: commit message 格式校验钩子
 # 创建日期: 2026年01月25日 15:32:00
-# 最后更新日期: 2026年01月29日 17:56:44
+# 最后更新日期: 2026年02月04日 23:29:27
 
 set -e
 
-# 钩子脚本所在目录（支持独立项目或仓库内 commit-hooks）
+# 钩子脚本所在目录（支持独立项目 commit-hooks 或仓库内 scripts/hooks）
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 GIT_ROOT="$(git rev-parse --show-toplevel)"
 

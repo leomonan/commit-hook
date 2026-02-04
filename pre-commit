@@ -2,11 +2,11 @@
 # 文件名: pre-commit
 # 描述: pre-commit 钩子 - 代码提交前检查
 # 创建日期: 2026年01月25日 15:32:00
-# 最后更新日期: 2026年02月02日 00:01:15
+# 最后更新日期: 2026年02月04日 23:29:27
 
 set -e
 
-# 钩子脚本所在目录（支持独立项目或仓库内 commit-hooks）
+# 钩子脚本所在目录（支持独立项目 commit-hooks 或仓库内 scripts/hooks）
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 GIT_ROOT="$(git rev-parse --show-toplevel)"
 

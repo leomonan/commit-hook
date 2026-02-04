@@ -3,7 +3,7 @@
 文件名: llm_review.py
 描述: LLM 辅助代码审查模块
 创建日期: 2026年01月25日 15:32:00
-最后更新日期: 2026年02月01日 14:21:16
+最后更新日期: 2026年02月04日 23:29:27
 """
 
 import hashlib
@@ -322,7 +322,7 @@ def _format_raw_response(obj, max_len: int = 4000) -> str:
 
 
 def _get_repo_root() -> Path:
-    """Git 仓库根目录（支持独立项目或仓库内 commit-hooks）"""
+    """Git 仓库根目录（支持独立项目 commit-hooks 或仓库内 scripts/hooks）"""
     r = subprocess.run(
         ["git", "rev-parse", "--show-toplevel"],
         capture_output=True,

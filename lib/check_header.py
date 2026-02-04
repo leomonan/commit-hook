@@ -3,7 +3,7 @@
 文件名: check_header.py
 描述: 源码文件头检测模块（多语言）
 创建日期: 2026年01月25日 15:32:00
-最后更新日期: 2026年02月01日 13:46:00
+最后更新日期: 2026年02月04日 23:29:27
 """
 
 import os
@@ -31,7 +31,7 @@ SUPPORTED_EXTS = (".py", ".ts", ".tsx", ".js", ".sh", ".md")
 # 排除的文件（不检查文件头）
 EXCLUDED_FILES = {
     ".gitmodules",  # Git 子模块配置文件
-    ".gitignore",   # Git 忽略文件
+    ".gitignore",  # Git 忽略文件
     ".gitattributes",  # Git 属性文件
 }
 
@@ -324,7 +324,7 @@ def _update_last_updated_field(filepath: str, new_datetime: str) -> bool:
 
 
 def _get_repo_root() -> Path:
-    """Git 仓库根目录（支持独立项目或仓库内 commit-hooks）"""
+    """Git 仓库根目录（支持独立项目 commit-hooks 或仓库内 scripts/hooks）"""
     r = subprocess.run(
         ["git", "rev-parse", "--show-toplevel"],
         capture_output=True,
