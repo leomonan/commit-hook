@@ -28,6 +28,13 @@ REQUIRED_FIELDS = ["文件名", "描述", "创建日期", "最后更新日期"]
 # 支持检测的源码文件后缀（同一格式的文件共用一套规则）
 SUPPORTED_EXTS = (".py", ".ts", ".tsx", ".js", ".sh", ".md")
 
+# 排除的文件（不检查文件头）
+EXCLUDED_FILES = {
+    ".gitmodules",  # Git 子模块配置文件
+    ".gitignore",   # Git 忽略文件
+    ".gitattributes",  # Git 属性文件
+}
+
 # 文件头模板示例（按格式分组）
 HEADER_TEMPLATES = {
     "python": '''"""
@@ -102,11 +109,13 @@ def get_staged_source_files(status_filters: str) -> list[str]:
     files = result.stdout.strip().split("\n")
     # 受支持后缀 + 无扩展名（在解析阶段基于内容再决定是否真正检查）
     # 跳过目录（如子模块路径 commit-hooks），避免 Is a directory 错误
+    # 排除 Git 配置文件（.gitmodules 等）
     return [
         f
         for f in files
         if (any(f.endswith(ext) for ext in SUPPORTED_EXTS) or Path(f).suffix == "")
         and not Path(f).is_dir()
+        and Path(f).name not in EXCLUDED_FILES
     ]
 
 
@@ -329,28 +338,25 @@ def _get_repo_root() -> Path:
 
 
 def _load_llm_provider_config() -> dict:
-    """加载 LLM 配置（支持 COMMIT_HOOKS_LLM_CONFIG 或 automanus.llm.toml / .commit-hooks.llm.toml）。"""
+    """加载 LLM 配置（优先 COMMIT_HOOKS_LLM_CONFIG，其次钩子目录 commit-hooks.llm.toml）。"""
     try:
         import tomllib  # py>=3.11
     except ImportError:
         raise RuntimeError("tomllib 不可用（需要 Python 3.11+）")
 
-    repo_root = _get_repo_root()
+    hooks_root = Path(__file__).resolve().parents[1]
     cfg_env = os.environ.get("COMMIT_HOOKS_LLM_CONFIG")
     if cfg_env:
-        cfg_path = Path(cfg_env) if Path(cfg_env).is_absolute() else repo_root / cfg_env
+        cfg_path = Path(cfg_env)
+        if not cfg_path.is_absolute():
+            cfg_path = hooks_root / cfg_env
     else:
-        for name in ("automanus.llm.toml", ".commit-hooks.llm.toml"):
-            p = repo_root / name
-            if p.exists():
-                cfg_path = p
-                break
-        else:
-            cfg_path = repo_root / "automanus.llm.toml"
+        cfg_path = hooks_root / "commit-hooks.llm.toml"
     if not cfg_path.exists():
         raise RuntimeError(
             f"LLM 配置文件不存在: {cfg_path}\n"
-            "可设置 COMMIT_HOOKS_LLM_CONFIG 或在仓库根创建 automanus.llm.toml / .commit-hooks.llm.toml"
+            f"请在钩子目录创建 commit-hooks.llm.toml：{hooks_root}\n"
+            "或设置 COMMIT_HOOKS_LLM_CONFIG 指定配置文件路径（绝对路径或相对钩子目录）"
         )
 
     with open(cfg_path, "rb") as f:
@@ -439,15 +445,27 @@ async def _async_llm_fix_last_updated(filepath: str, cfg: dict) -> bool:
 
     current_dt = _get_current_datetime_str()
     filename = abs_filepath.name
-    # 计算相对于仓库根目录的路径（用于 patch 中的路径）
-    repo_root = Path(__file__).resolve().parents[3]
+    # 计算相对于仓库根目录的路径（用于 patch 中的路径）；使用 Git 仓库根，兼容 commit-hooks 在任意层级（含子模块）
+    try:
+        repo_root = _get_repo_root()
+    except RuntimeError:
+        return False
     try:
         rel_path = str(abs_filepath.relative_to(repo_root))
     except ValueError:
         # 如果无法计算相对路径，使用原始文件路径
         rel_path = filepath
 
-    prompt = f"""你是一个代码助手，任务是修复文件头中的"最后更新日期"字段。
+    # 判断文件类型并获取对应的文件头模板
+    file_group = classify_header_group(str(abs_filepath), header_snippet)
+    template_example = HEADER_TEMPLATES.get(file_group, "")
+
+    # 检测是否已有文件头（简单判断：是否包含"文件名"或"描述"字段）
+    has_header = "文件名" in header_snippet or "描述" in header_snippet
+
+    if has_header:
+        # 情况1：已有文件头，只需更新"最后更新日期"
+        prompt = f"""你是一个代码助手，任务是修复文件头中的"最后更新日期"字段。
 
 ## 任务
 文件 `{filename}` 的文件头中"最后更新日期"字段需要更新为：`{current_dt}`
@@ -456,7 +474,7 @@ async def _async_llm_fix_last_updated(filepath: str, cfg: dict) -> bool:
 1. **只修改"最后更新日期"字段**，禁止修改其他任何内容（包括创建日期、描述、文件名等）。
 2. 如果文件头中**已有"最后更新日期"字段**，只更新其日期值。
 3. 如果文件头中**缺少"最后更新日期"字段**，在"创建日期"字段之后添加一行，格式与"创建日期"保持一致（注释前缀、冒号风格等）。
-4. **必须返回完整的文件头片段**（从文件开始到文件头注释结束），保持原有格式和行数，不要添加或删除行。
+4. **必须返回完整的文件头片段**（从文件开始到文件头注释结束），保持原有格式和缩进，不要改变空格/Tab。
 
 ## 文件头片段（需要修复的部分）
 
@@ -464,7 +482,46 @@ async def _async_llm_fix_last_updated(filepath: str, cfg: dict) -> bool:
 {header_snippet}
 ```
 
-请直接返回修复后的完整文件头片段（保持原有行数和格式），不要包含正文代码，不要使用 Markdown 代码块。"""
+请直接返回修复后的完整文件头片段（保持原有格式和缩进），不要包含正文代码，不要使用 Markdown 代码块。"""
+    else:
+        # 情况2：没有文件头，需要添加完整文件头
+        prompt = f"""你是一个代码助手，任务是为文件添加规范的文件头。
+
+## 任务
+文件 `{filename}` 缺少文件头，需要在文件开头添加包含以下字段的文件头：
+- 文件名: {filename}
+- 描述: （根据文件内容推断简短描述，1-2 句话）
+- 创建日期: {current_dt}
+- 最后更新日期: {current_dt}
+
+## 文件头格式参考
+根据文件类型使用对应的注释格式：
+
+{template_example}
+
+## 强制约束
+1. **必须包含所有必需字段**：文件名、描述、创建日期、最后更新日期。
+2. **描述字段**：根据文件前几行代码推断功能，简短描述（1-2 句话）。
+3. **保持原有代码格式**：如果文件开头有 shebang（如 `#!/usr/bin/env python3`），文件头必须放在 shebang 之后。
+4. **返回完整文件头 + 原有代码**：返回添加文件头后的完整前 {header_end_idx} 行内容。
+
+## 当前文件内容（前 {header_end_idx} 行）
+
+```
+{header_snippet}
+```
+
+请直接返回添加文件头后的完整内容（前 {header_end_idx} 行），不要使用 Markdown 代码块。"""
+
+    if os.environ.get("COMMIT_HOOKS_LLM_REVIEW_PRINT_PROMPT", "").lower() in (
+        "1",
+        "true",
+        "yes",
+    ):
+        print(f"{YELLOW}[header-fix] 完整提示词：{NC}")
+        print("---")
+        print(prompt)
+        print("---")
 
     api_type = cfg["api_type"]
     base_url = cfg["base_url"]
@@ -504,6 +561,17 @@ async def _async_llm_fix_last_updated(filepath: str, cfg: dict) -> bool:
             resp.raise_for_status()
             result = resp.json()
 
+        # 打印原始响应（用于调试）
+        if os.environ.get("COMMIT_HOOKS_LLM_REVIEW_PRINT_PROMPT", "").lower() in (
+            "1",
+            "true",
+            "yes",
+        ):
+            print(f"{YELLOW}[header-fix] LLM 原始响应：{NC}")
+            print("---")
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            print("---")
+
         # 解析响应
         if "choices" in result and result["choices"]:
             msg = result["choices"][0].get("message") or {}
@@ -518,7 +586,20 @@ async def _async_llm_fix_last_updated(filepath: str, cfg: dict) -> bool:
                     if t:
                         fixed_header = t
         else:
+            if os.environ.get("DEBUG"):
+                print(f"DEBUG: 无法从响应中提取内容，响应格式: {list(result.keys())}")
             return False
+
+        # 打印解析后的文件头内容
+        if os.environ.get("COMMIT_HOOKS_LLM_REVIEW_PRINT_PROMPT", "").lower() in (
+            "1",
+            "true",
+            "yes",
+        ):
+            print(f"{YELLOW}[header-fix] 解析后的文件头内容：{NC}")
+            print("---")
+            print(fixed_header)
+            print("---")
 
         # 去掉可能的代码块标记
         if fixed_header.startswith("```"):
@@ -644,6 +725,11 @@ def _llm_fix_last_updated(filepath: str) -> bool:
     """同步包装器：调用异步 LLM 修复函数。"""
     try:
         cfg = _load_llm_provider_config()
+    except Exception as e:
+        # 未配置 LLM 或配置无效时明确提示，避免用户误以为大模型已调用但失败
+        print(f"{YELLOW}[header-fix]{NC} LLM 未配置或配置无效，跳过 LLM 修复: {e}")
+        return False
+    try:
         return asyncio.run(_async_llm_fix_last_updated(filepath, cfg))
     except Exception as e:
         if os.environ.get("DEBUG"):

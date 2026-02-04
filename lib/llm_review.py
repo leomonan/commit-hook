@@ -648,26 +648,21 @@ async def _async_llm_review(diff: str) -> Optional[dict]:
         import httpx
         import tomllib
 
-        # 读取 LLM 配置（支持独立项目：COMMIT_HOOKS_LLM_CONFIG 或约定路径）
-        repo_root = _get_repo_root()
+        # 读取 LLM 配置：只在钩子目录读取（或显式通过环境变量指定）
+        hooks_root = Path(__file__).resolve().parents[1]
         cfg_env = os.environ.get("COMMIT_HOOKS_LLM_CONFIG")
         if cfg_env:
-            llm_config_path = (
-                Path(cfg_env) if Path(cfg_env).is_absolute() else repo_root / cfg_env
-            )
+            llm_config_path = Path(cfg_env)
+            if not llm_config_path.is_absolute():
+                llm_config_path = hooks_root / cfg_env
         else:
-            for name in ("automanus.llm.toml", ".commit-hooks.llm.toml"):
-                p = repo_root / name
-                if p.exists():
-                    llm_config_path = p
-                    break
-            else:
-                llm_config_path = repo_root / "automanus.llm.toml"
+            llm_config_path = hooks_root / "commit-hooks.llm.toml"
 
         if not llm_config_path.exists():
             raise ConfigurationError(
                 f"LLM 配置文件不存在: {llm_config_path}\n"
-                "可设置环境变量 COMMIT_HOOKS_LLM_CONFIG 指定路径，或在仓库根创建 automanus.llm.toml / .commit-hooks.llm.toml"
+                f"请在钩子目录创建 commit-hooks.llm.toml：{hooks_root}\n"
+                "或设置环境变量 COMMIT_HOOKS_LLM_CONFIG 指定配置文件路径（绝对路径或相对钩子目录）"
             )
 
         with open(llm_config_path, "rb") as f:

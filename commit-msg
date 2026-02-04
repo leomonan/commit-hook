@@ -10,6 +10,14 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 GIT_ROOT="$(git rev-parse --show-toplevel)"
 
+# 若存在 .env 则加载（LLM API Key 等），不覆盖已有环境变量
+if [[ -f "${SCRIPT_DIR}/.env" ]]; then
+    set -a
+    # shellcheck source=/dev/null
+    . "${SCRIPT_DIR}/.env"
+    set +a
+fi
+
 source "${SCRIPT_DIR}/config.sh"
 
 # 颜色定义

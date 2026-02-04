@@ -1,0 +1,17 @@
+# 本地 LLM API Key，勿提交
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# 系统与编辑器
+.DS_Store
+*.swp
+*.swo
+*~
+
+# 调试/临时
+*.patch
+*.log

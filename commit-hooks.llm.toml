@@ -1,0 +1,51 @@
+# commit-hooks.llm.toml
+# 描述：Git Commit Hooks 的 LLM 配置模板（请勿提交真实 API Key）
+# 用途：
+# - header-fix（commit-hooks/lib/check_header.py）：读取 [global].llm_provider
+# - LLM Review（commit-hooks/lib/llm_review.py）：读取 [global].review_provider
+#
+# 查找规则：
+# 1) 若设置 COMMIT_HOOKS_LLM_CONFIG：读取该路径（绝对路径或相对钩子目录）
+# 2) 否则：读取本文件（钩子目录内的 commit-hooks.llm.toml）
+
+[global]
+# header-fix 使用（必填：若想启用 LLM 修复）
+llm_provider = "deepseek"
+# commit-msg LLM Review 使用（可选：若想启用 LLM Review；可与 llm_provider 相同）
+review_provider = "deepseek"
+
+# ---------------------------
+# OpenAI 兼容（OpenAI / DeepSeek / Doubao / 自建网关等）
+# base_url：不包含 /chat/completions
+# ---------------------------
+[openai]
+api_type = "openai"
+base_url = "https://api.openai.com/v1"
+model = "gpt-4o-mini"
+timeout = 60
+# 推荐：用环境变量提供密钥
+api_key_env = "OPENAI_API_KEY"
+# 不推荐：明文写入密钥（避免提交到仓库）
+# api_key = "YOUR_API_KEY"
+
+# ---------------------------
+# DeepSeek（OpenAI 兼容）
+# 文档：https://api-docs.deepseek.com/
+# ---------------------------
+[deepseek]
+api_type = "openai"
+base_url = "https://api.deepseek.com"
+model = "deepseek-chat"
+timeout = 60
+api_key_env = "DEEPSEEK_API_KEY"
+
+# ---------------------------
+# Anthropic
+# base_url：不包含 /v1/messages
+# ---------------------------
+[anthropic]
+api_type = "anthropic"
+base_url = "https://api.anthropic.com"
+model = "claude-3-5-sonnet-latest"
+timeout = 60
+api_key_env = "ANTHROPIC_API_KEY"

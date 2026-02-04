@@ -55,12 +55,24 @@ bash commit-hooks/uninstall.sh
 
 ### LLM Review 配置
 
-LLM 审查使用独立配置文件，支持：
+LLM 审查/修复使用独立配置文件，支持：
 
-1. **环境变量**：`COMMIT_HOOKS_LLM_CONFIG` 指定配置文件路径（绝对路径或相对仓库根）。
-2. **约定路径**（按顺序查找）：仓库根下 `automanus.llm.toml` 或 `.commit-hooks.llm.toml`。
+1. **环境变量**：`COMMIT_HOOKS_LLM_CONFIG` 指定配置文件路径（绝对路径或相对钩子目录）。
+2. **约定路径**：钩子目录（即 `install.sh` 所在目录）下 `commit-hooks.llm.toml`。
 
-配置文件需包含 `[global] review_provider = "xxx"` 及对应 `[xxx]` 节（base_url、model、api_key 或 api_key_env）。详见项目内示例或原仓库 `scripts/hooks/README.md`。
+配置文件需包含：
+- `[global] llm_provider = "xxx"`（供 header-fix）
+- `[global] review_provider = "xxx"`（供 LLM Review，可与 llm_provider 相同）
+以及对应 `[xxx]` 节（base_url、model、api_key 或 api_key_env、timeout 等）。本仓库已提供模板：`commit-hooks/commit-hooks.llm.toml`。
+
+**API Key 存放**：钩子目录下提供 `.env.example` 模板；复制为 `.env` 后填写对应 KEY（`.env` 已被忽略，勿提交）。提交前需让环境变量生效，例如：
+
+```bash
+cp commit-hooks/.env.example commit-hooks/.env
+# 编辑 commit-hooks/.env 填入 OPENAI_API_KEY / DEEPSEEK_API_KEY / ANTHROPIC_API_KEY 等
+source commit-hooks/.env   # 或：export $(grep -v '^#' commit-hooks/.env | xargs)
+git commit -m "..."
+```
 
 ### 缓存目录
 
