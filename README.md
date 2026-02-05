@@ -4,7 +4,7 @@
 文件名: README.md
 描述: 独立 Git 提交钩子项目说明与安装配置
 创建日期: 2026年02月04日 17:24:37
-最后更新日期: 2026年02月04日 17:24:37
+最后更新日期: 2026年02月05日星期四 10:20:10
 -->
 
 ## 概述
@@ -92,6 +92,17 @@ LLM Review 缓存默认：`~/.cache/commit-hooks/llm_review`。可通过环境�
 
 紧急跳过所有钩子：`git commit --no-verify`。
 
+## 可选工具（LLM 辅助修复）
+
+Shell 脚本检查失败时，可使用本目录下的 LLM 工具仅修复 shellcheck 报错（不改其他逻辑）：
+
+```bash
+# 在仓库根执行
+python3 commit-hooks/lib/llm_fix_shellcheck.py
+```
+
+支持参数：`--files <文件列表>`、`--no-apply`（仅校验 patch）、`--print-prompt` / `--print-patch`（调试）。LLM 配置与 LLM Review 共用 `commit-hooks.llm.toml`（`review_provider`）。
+
 ## 目录结构
 
 ```
@@ -109,7 +120,8 @@ commit-hooks/
     ├── check_format.py
     ├── check_shell.sh
     ├── check_no_silent_excepts.py
-    └── llm_review.py
+    ├── llm_review.py
+    └── llm_fix_shellcheck.py
 ```
 
 ## 集成到其他项目
