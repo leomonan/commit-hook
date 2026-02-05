@@ -2,7 +2,7 @@
 # 文件名: check_shell.sh
 # 描述: Shell 脚本检查（shellcheck）
 # 创建日期: 2026年01月26日 14:42:11
-# 最后更新日期: 2026年01月29日 11:21:38
+# 最后更新日期: 2026年02月05日 09:41:43
 
 check_shell_scripts() {
     RED='\033[0;31m'
@@ -101,8 +101,41 @@ if [[ $found_errors -eq 1 ]]; then
     fi
 
     echo ""
-    echo -e "${YELLOW}可选：${NC}使用 LLM 辅助修复本次 shellcheck 报错（仅修改报错脚本，禁止改其他逻辑）:"
-    echo "  可在项目内添加 llm_fix_shellcheck 等工具辅助修复"
+    
+    # 获取脚本所在目录（兼容独立项目 commit-hooks 或仓库内 scripts/hooks）
+    local SCRIPT_DIR
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local FIX_TOOL="${SCRIPT_DIR}/llm_fix_shellcheck.py"
+    
+    if [[ -f "$FIX_TOOL" ]]; then
+        # 检测是否在交互式终端中
+        if [[ -t 0 ]]; then
+            echo -e "${YELLOW}可选：${NC}检测到 LLM 修复工具，是否尝试自动修复本次 shellcheck 报错？(仅修复报错，不改其他逻辑)"
+            echo -n "运行 LLM 修复? [y/N] "
+            read -r response < /dev/tty 2>/dev/null || response="n"
+            case "$(echo "$response" | tr 'A-Z' 'a-z')" in
+                y|yes)
+                    echo -e "${GREEN}[pre-commit]${NC} 正在运行 LLM 修复工具..."
+                    local PY_CMD="${PYTHON_CMD:-python3}"
+                    if "$PY_CMD" "$FIX_TOOL" --files "${error_files[@]}"; then
+                        echo -e "${GREEN}[pre-commit]${NC} 修复成功！请检查更改并重新提交（git add ... && git commit ...）"
+                        # 修复后仍返回 1 阻断本次提交，让用户确认变更
+                        return 1
+                    else
+                        echo -e "${RED}[pre-commit]${NC} LLM 修复失败或未完全修复"
+                    fi
+                    ;;
+                *)
+                    echo "  已跳过自动修复。手动运行命令: ${PYTHON_CMD:-python3} $FIX_TOOL"
+                    ;;
+            esac
+        else
+            echo -e "${YELLOW}提示：${NC}可运行以下命令尝试自动修复:"
+            echo "  ${PYTHON_CMD:-python3} $FIX_TOOL"
+        fi
+    else
+        echo "  可在 commit-hooks/lib 目录添加 llm_fix_shellcheck.py 工具辅助修复"
+    fi
     echo ""
     
     return 1
