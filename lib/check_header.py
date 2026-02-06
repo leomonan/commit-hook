@@ -3,7 +3,7 @@
 文件名: check_header.py
 描述: 源码文件头检测模块（多语言）
 创建日期: 2026年01月25日 15:32:00
-最后更新日期: 2026年02月04日 23:29:27
+最后更新日期: 2026年02月06日 23:58:12
 """
 
 import os
@@ -1048,19 +1048,13 @@ def main() -> int:
             response = tty.readline().strip().lower()
 
             if response in ("", "y", "yes"):
-                # 调用项目内 llm_generate_header 工具（支持 tools/ 或 scripts/tools/）
-                repo_root = _get_repo_root()
-                llm_header_script = None
-                for candidate in (
-                    repo_root / "tools" / "llm_generate_header.py",
-                    repo_root / "scripts" / "tools" / "llm_generate_header.py",
-                ):
-                    if candidate.exists():
-                        llm_header_script = candidate
-                        break
-                if llm_header_script is None:
+                # 调用 commit-hooks/lib/ 内的 llm_generate_header 工具（SSOT：工具随钩子一起分发）
+                llm_header_script = (
+                    Path(__file__).resolve().parent / "llm_generate_header.py"
+                )
+                if not llm_header_script.exists():
                     print(
-                        f"{RED}[header-fix]{NC} 未找到项目内 llm_generate_header 工具（可放置于 tools/ 或 scripts/tools/）"
+                        f"{RED}[header-fix]{NC} 未找到 llm_generate_header 工具: {llm_header_script}"
                     )
                 else:
                     cmd = [sys.executable, str(llm_header_script)] + new_files_list
