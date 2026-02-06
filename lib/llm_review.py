@@ -3,7 +3,7 @@
 文件名: llm_review.py
 描述: LLM 辅助代码审查模块
 创建日期: 2026年01月25日 15:32:00
-最后更新日期: 2026年02月04日 23:29:27
+最后更新日期: 2026年02月07日 00:40:00
 """
 
 import hashlib
@@ -11,17 +11,22 @@ import subprocess
 import sys
 import os
 import json
-import asyncio
 import re
 import time
 from typing import Optional, Tuple, List, Dict
 from pathlib import Path
 
-# 颜色定义
-RED = "\033[0;31m"
-GREEN = "\033[0;32m"
-YELLOW = "\033[1;33m"
-NC = "\033[0m"
+from llm_client import (
+    ConfigurationError,
+    LLMCallError,
+    RED,
+    GREEN,
+    YELLOW,
+    NC,
+    load_llm_config,
+    call_llm,
+    strip_code_fences,
+)
 
 # 请求超时上限（秒），避免配置过大；实际使用 min(provider.timeout, REQUEST_TIMEOUT_CAP)
 REQUEST_TIMEOUT_CAP = 600
@@ -284,18 +289,6 @@ def _parse_diff_and_filter(diff: str) -> Tuple[str, list]:
     return filtered_diff, skipped_files
 
 
-class ConfigurationError(Exception):
-    """配置错误异常（应阻断提交）"""
-
-    pass
-
-
-class NetworkError(Exception):
-    """网络/依赖/API 等运行时错误；main 中会阻断提交并提示跳过方式"""
-
-    pass
-
-
 def get_staged_diff() -> str:
     """获取暂存区的 diff 内容（已过滤：不在审查列表中的文件会被跳过）"""
     result = subprocess.run(
@@ -310,29 +303,6 @@ def get_staged_diff() -> str:
     # 解析并过滤 diff：只保留需要审查的文件
     filtered_diff, _ = _parse_diff_and_filter(raw_diff)
     return filtered_diff
-
-
-def _format_raw_response(obj, max_len: int = 4000) -> str:
-    """将 API 响应对象格式化为可读字符串，用于错误信息。"""
-    try:
-        raw = json.dumps(obj, ensure_ascii=False, indent=2)
-    except Exception:
-        raw = repr(obj)
-    return raw[:max_len] + ("\n... (已截断)" if len(raw) > max_len else "")
-
-
-def _get_repo_root() -> Path:
-    """Git 仓库根目录（支持独立项目 commit-hooks 或仓库内 scripts/hooks）"""
-    r = subprocess.run(
-        ["git", "rev-parse", "--show-toplevel"],
-        capture_output=True,
-        text=True,
-        check=False,
-        cwd=os.getcwd(),
-    )
-    if r.returncode != 0:
-        raise ConfigurationError("无法获取 Git 仓库根目录，请确保在 Git 仓库内执行")
-    return Path(r.stdout.strip())
 
 
 def _cache_dir() -> Path:
@@ -432,7 +402,7 @@ def _record_stats(
 
 
 def _update_last_stats_ignored() -> None:
-    """更新最近一条统计记录，标记为“已忽略不确定问题”"""
+    """更新最近一条统计记录，标记为已忽略不确定问题"""
     try:
         stats = _load_stats()
         if not stats:
@@ -512,7 +482,7 @@ def _build_prompt(diff: str) -> str:
 
 ## 审查原则（最高优先级）
 
-你需要对每个潜在问题给出“确定性”判断：
+你需要对每个潜在问题给出"确定性"判断：
 - **certain（确定）**：你高度确信违反了某条原则，证据充分、规则匹配清晰
 - **uncertain（不确定）**：存在一定风险或异味，但根据当前 diff 信息无法 100% 确认违反原则
 
@@ -608,26 +578,26 @@ def _build_prompt(diff: str) -> str:
 def call_llm_review(diff: str) -> Optional[dict]:
     """调用 LLM 进行代码审查"""
     try:
-        # 使用 asyncio 运行异步函数
-        return asyncio.run(_async_llm_review(diff))
-    except (ConfigurationError, NetworkError):
-        # 配置错误和网络错误直接向上传播
+        return _do_llm_review(diff)
+    except (ConfigurationError, LLMCallError):
+        # 配置错误和 LLM 调用错误直接向上传播
         raise
     except Exception as e:
-        # 其他未知错误包装为网络错误
-        raise NetworkError(f"LLM Review 调用失败: {e}")
+        # 其他未知错误包装为 LLM 调用错误
+        raise LLMCallError(f"LLM Review 调用失败: {e}")
 
 
-async def _async_llm_review(diff: str) -> Optional[dict]:
-    """异步调用 LLM 进行代码审查
+def _do_llm_review(diff: str) -> Optional[dict]:
+    """执行 LLM 代码审查
 
-    使用简化的实现，直接调用 httpx 而不依赖完整的 LLM 客户端
-    遵循 SSOT 原则：review_provider 是 LLM Review 模型配置的唯一来源
+    使用 llm_client 公共模块进行配置加载和 API 调用。
+    遵循 SSOT 原则：llm_provider 是 LLM 模型配置的唯一来源。
     """
-    content = None  # 用于在异常处理中访问
+    content_text = None  # 用于在 json.JSONDecodeError 异常处理中访问
     try:
         # 1. 构造 prompt（仅依赖 diff），用于缓存 key 与 API 请求
         prompt = _build_prompt(diff)
+
         # 2. 查缓存：输入 hash 命中则直接返回，避免重复调用 LLM
         # 如果设置了 COMMIT_HOOKS_LLM_REVIEW_FORCE=1，则跳过缓存
         force_refresh = os.environ.get("COMMIT_HOOKS_LLM_REVIEW_FORCE", "").lower() in (
@@ -645,88 +615,15 @@ async def _async_llm_review(diff: str) -> Optional[dict]:
             return cache[h]
         if force_refresh:
             print(f"{YELLOW}[LLM Review]{NC} 分析中... 强制刷新（跳过缓存）")
-        # 3. 未命中：加载配置并调用 API
-        import httpx
-        import tomllib
 
-        # 读取 LLM 配置：只在钩子目录读取（或显式通过环境变量指定）
-        hooks_root = Path(__file__).resolve().parents[1]
-        cfg_env = os.environ.get("COMMIT_HOOKS_LLM_CONFIG")
-        if cfg_env:
-            llm_config_path = Path(cfg_env)
-            if not llm_config_path.is_absolute():
-                llm_config_path = hooks_root / cfg_env
-        else:
-            llm_config_path = hooks_root / "commit-hooks.llm.toml"
+        # 3. 加载配置（使用公共模块 SSOT）
+        cfg = load_llm_config(request_timeout_cap=REQUEST_TIMEOUT_CAP)
 
-        if not llm_config_path.exists():
-            raise ConfigurationError(
-                f"LLM 配置文件不存在: {llm_config_path}\n"
-                f"请在钩子目录创建 commit-hooks.llm.toml：{hooks_root}\n"
-                "或设置环境变量 COMMIT_HOOKS_LLM_CONFIG 指定配置文件路径（绝对路径或相对钩子目录）"
-            )
+        print(
+            f"{YELLOW}[LLM Review]{NC} 分析中... 检视模型: {cfg['provider_name']} / {cfg['model']}"
+        )
 
-        with open(llm_config_path, "rb") as f:
-            config = tomllib.load(f)
-
-        # 读取统一 LLM 提供商（遵循 SSOT 原则）
-        provider_name = config.get("global", {}).get("llm_provider")
-
-        if not provider_name:
-            raise ConfigurationError(
-                "LLM 配置缺失\n"
-                f"请在 {llm_config_path.name} 的 [global] 部分添加：\n"
-                '  llm_provider = "anthropic"  # 或其他提供商名称'
-            )
-
-        provider_config = config.get(provider_name, {})
-
-        if not provider_config:
-            available = [k for k in config.keys() if k != "global"]
-            raise ConfigurationError(
-                f"提供商 '{provider_name}' 配置不存在\n"
-                f"可用提供商：{', '.join(available)}"
-            )
-
-        # 获取配置
-        api_type = provider_config.get("api_type", "openai")
-        
-        # Base URL: 优先从环境变量读取（如果配置了 base_url_env）
-        base_url = provider_config.get("base_url")
-        base_url_env = provider_config.get("base_url_env")
-        if base_url_env:
-            env_url = os.getenv(base_url_env)
-            if env_url:
-                base_url = env_url
-
-        model = provider_config.get("model")
-        timeout = provider_config.get("timeout", 60)
-        request_timeout = min(timeout, REQUEST_TIMEOUT_CAP)
-
-        # 处理 API Key（支持直接配置或环境变量）
-        api_key = provider_config.get("api_key")
-        if not api_key:
-            api_key_env = provider_config.get("api_key_env")
-            if api_key_env:
-                api_key = os.getenv(api_key_env)
-                if not api_key:
-                    raise ConfigurationError(
-                        f"API Key 环境变量未设置\n"
-                        f"请设置环境变量：{api_key_env}\n"
-                        f'例如：export {api_key_env}="your-api-key"'
-                    )
-            else:
-                raise ConfigurationError(
-                    f"提供商 {provider_name} 缺少 api_key 或 api_key_env 配置"
-                )
-
-        if not all([base_url, model]):
-            raise ConfigurationError(
-                f"提供商 {provider_name} 配置不完整（缺少 base_url 或 model）"
-            )
-
-        print(f"{YELLOW}[LLM Review]{NC} 分析中... 检视模型: {provider_name} / {model}")
-
+        # 调试：打印完整提示词
         if os.environ.get("COMMIT_HOOKS_LLM_REVIEW_PRINT_PROMPT", "").lower() in (
             "1",
             "true",
@@ -737,144 +634,16 @@ async def _async_llm_review(diff: str) -> Optional[dict]:
             print(prompt)
             print("---")
 
-        # 根据 API 类型构建请求
-        if api_type == "anthropic":
-            # Anthropic API 格式
-            api_url = f"{base_url}/v1/messages"
-            headers = {
-                "Content-Type": "application/json",
-                "x-api-key": api_key,
-                "anthropic-version": "2023-06-01",
-            }
+        # 4. 调用 LLM（使用公共模块统一 API 调用）
+        content_text = call_llm(
+            prompt,
+            cfg,
+            max_tokens=16000,
+            temperature=0.3,
+            log_prefix="LLM Review",
+        )
 
-            request_body = {
-                "model": model,
-                "messages": [{"role": "user", "content": prompt}],
-                # Anthropic API 必须设置 max_tokens，设置一个很大的值以避免截断
-                # 注意：Anthropic API 的最大值通常是 8192 或更高（取决于模型）
-                "max_tokens": 16000,  # 设置足够大的值，避免 JSON 响应被截断
-                "temperature": 0.3,
-            }
-
-            # 发送请求
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                max_retries = 3
-                base_delay = 1
-                for attempt in range(max_retries):
-                    try:
-                        response = await asyncio.wait_for(
-                            client.post(api_url, headers=headers, json=request_body),
-                            timeout=request_timeout,
-                        )
-                        response.raise_for_status()
-                        break
-                    except httpx.HTTPStatusError as e:
-                        # 429 或 5xx 重试
-                        if e.response.status_code == 429 or e.response.status_code >= 500:
-                            if attempt < max_retries - 1:
-                                print(f"{YELLOW}[LLM Review] HTTP {e.response.status_code}，正在重试 ({attempt + 1}/{max_retries})...{NC}")
-                                delay = base_delay * (2 ** attempt)
-                                await asyncio.sleep(delay)
-                                continue
-                        raise
-                    except httpx.ConnectError:
-                        if attempt < max_retries - 1:
-                            print(f"{YELLOW}[LLM Review] 连接错误，正在重试 ({attempt + 1}/{max_retries})...{NC}")
-                            delay = base_delay * (2 ** attempt)
-                            await asyncio.sleep(delay)
-                            continue
-                        raise
-
-                result = response.json()
-        else:
-            # OpenAI 兼容格式（DeepSeek, Doubao, OpenAI 等）
-            api_url = f"{base_url}/chat/completions"
-            headers = {
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {api_key}",
-            }
-
-            request_body = {
-                "model": model,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.3,
-                # OpenAI 兼容 API 可以不设置 max_tokens，会使用模型的最大值
-                # 这样可以根据不同模型自动适配，避免人为限制导致截断
-                # 如果 API 不支持，会自动使用模型默认的最大值（通常是 4096-8192）
-            }
-
-            # 发送请求
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                max_retries = 3
-                base_delay = 1
-                for attempt in range(max_retries):
-                    try:
-                        response = await asyncio.wait_for(
-                            client.post(api_url, headers=headers, json=request_body),
-                            timeout=request_timeout,
-                        )
-                        response.raise_for_status()
-                        break
-                    except httpx.HTTPStatusError as e:
-                        # 429 或 5xx 重试
-                        if e.response.status_code == 429 or e.response.status_code >= 500:
-                            if attempt < max_retries - 1:
-                                print(f"{YELLOW}[LLM Review] HTTP {e.response.status_code}，正在重试 ({attempt + 1}/{max_retries})...{NC}")
-                                delay = base_delay * (2 ** attempt)
-                                await asyncio.sleep(delay)
-                                continue
-                        raise
-                    except httpx.ConnectError:
-                        if attempt < max_retries - 1:
-                            print(f"{YELLOW}[LLM Review] 连接错误，正在重试 ({attempt + 1}/{max_retries})...{NC}")
-                            delay = base_delay * (2 ** attempt)
-                            await asyncio.sleep(delay)
-                            continue
-                        raise
-
-                result = response.json()
-
-        # 统一解析：支持 OpenAI 格式与 Anthropic 格式（代理可能返回任一）
-        if "choices" in result and result["choices"]:
-            msg = result["choices"][0].get("message") or {}
-            content = (msg.get("content") or msg.get("text") or "").strip()
-        elif "content" in result and result["content"]:
-            # 遍历所有 content 块：Anthropic 扩展思考等格式下，首块可能为 type "thinking"（仅含 thinking 键），
-            # 终答在后续 type "text" 的 text 中；取最后一个非空 text/content 作为 content
-            content = ""
-            for block in result["content"]:
-                if isinstance(block, str):
-                    content = block.strip()
-                elif isinstance(block, dict):
-                    block_text = (
-                        block.get("text") or block.get("content") or ""
-                    ).strip()
-                    if block_text:
-                        content = block_text
-        else:
-            _raw = _format_raw_response(result)
-            raise NetworkError(
-                f"API 响应格式异常：缺少 choices 或 content\n响应原文:\n{_raw}"
-            )
-        if not content:
-            _raw = _format_raw_response(result)
-            raise NetworkError(f"API 响应无有效文本内容\n响应原文:\n{_raw}")
-
-        # 尝试提取 JSON（可能被包裹在 markdown 代码块中）
-        if content.startswith("```"):
-            # 移除 markdown 代码块标记
-            lines = content.split("\n")
-            json_lines = []
-            in_code_block = False
-            for line in lines:
-                if line.startswith("```"):
-                    in_code_block = not in_code_block
-                    continue
-                if in_code_block or (not line.startswith("```")):
-                    json_lines.append(line)
-            content = "\n".join(json_lines).strip()
-
-        # 如果启用了打印提示词，也打印 LLM 返回的原始内容
+        # 调试：打印 LLM 返回的原始内容
         if os.environ.get("COMMIT_HOOKS_LLM_REVIEW_PRINT_PROMPT", "").lower() in (
             "1",
             "true",
@@ -882,11 +651,14 @@ async def _async_llm_review(diff: str) -> Optional[dict]:
         ):
             print(f"{YELLOW}[LLM Review] LLM 返回的原始内容：{NC}")
             print("---")
-            print(content)
+            print(content_text)
             print("---")
 
-        # 解析 JSON 并写入缓存
-        parsed = json.loads(content)
+        # 5. 解析 JSON
+        content_text = strip_code_fences(content_text)
+        parsed = json.loads(content_text)
+
+        # 6. 写入缓存
         c = _load_cache()
         # 如果 key 已存在，先删除（确保新条目在最后，符合 LRU）
         if h in c:
@@ -895,59 +667,25 @@ async def _async_llm_review(diff: str) -> Optional[dict]:
         _save_cache(c)
         return parsed
 
-    except asyncio.TimeoutError:
-        raise NetworkError(f"LLM Review 超时（{request_timeout}秒）")
     except json.JSONDecodeError as e:
-        # 如果启用了打印提示词，打印原始内容以便调试
+        # JSON 解析失败：打印原始内容以便调试
         if os.environ.get("COMMIT_HOOKS_LLM_REVIEW_PRINT_PROMPT", "").lower() in (
             "1",
             "true",
             "yes",
         ):
-            if content is not None:
+            if content_text is not None:
                 print(f"{RED}[LLM Review] JSON 解析失败，原始内容：{NC}")
                 print("---")
-                print(content)
+                print(content_text)
                 print("---")
-        raise NetworkError(f"LLM 返回的 JSON 格式错误: {e}")
-    except httpx.HTTPStatusError as e:
-        body = ""
-        try:
-            body = (e.response.text or "").strip()
-        except Exception:
-            try:
-                body = (
-                    (e.response.content or b"")
-                    .decode("utf-8", errors="replace")
-                    .strip()
-                )
-            except Exception:
-                body = "（无法读取响应体）"
-        if not body:
-            body = "（无返回内容）"
-        else:
-            # 错误信息不截断，确保用户能看到完整原因（如余额不足、权限错误等）
-            pass
-            
-        url_info = ""
-        try:
-            url_info = f"\n请求 URL: {e.request.url}"
-        except Exception:
-            url_info = ""
-            
-        # 最小惊讶原则：直接打印完整错误信息
-        print(f"{RED}[LLM Review] HTTP 错误: {e.response.status_code}{NC}")
-        print(f"响应内容: {body}")
-        
-        raise NetworkError(
-            f"HTTP 错误: {e.response.status_code}{url_info}\n返回内容:\n{body}"
-        )
+        raise LLMCallError(f"LLM 返回的 JSON 格式错误: {e}")
     except ConfigurationError:
-        # 配置错误直接向上传播
+        raise
+    except LLMCallError:
         raise
     except Exception as e:
-        # 其他错误视为网络错误
-        raise NetworkError(f"LLM API 调用失败: {e}")
+        raise LLMCallError(f"LLM API 调用失败: {e}")
 
 
 def _handle_error(tag: str, message: str, hint_extra: str = "") -> int:
@@ -974,10 +712,10 @@ def _write_commit_suggestion(suggestion: str) -> None:
             text=True,
             check=False,
         )
-        git_dir = (result.stdout or "").strip()
-        if not git_dir:
+        git_dir_path = (result.stdout or "").strip()
+        if not git_dir_path:
             return
-        path = Path(git_dir) / SUGGESTION_FILE_NAME
+        path = Path(git_dir_path) / SUGGESTION_FILE_NAME
         if not suggestion:
             # 无建议时清理旧文件
             try:
@@ -1029,10 +767,10 @@ def main() -> int:
         summary = (result or {}).get("summary") or ""
         issues = (result or {}).get("issues") or []
         if not summary.strip():
-            raise NetworkError("LLM 未返回 summary，审查结果无效")
+            raise LLMCallError("LLM 未返回 summary，审查结果无效")
     except ConfigurationError as e:
         return _handle_error("配置错误", str(e), "修复配置后重新提交")
-    except NetworkError as e:
+    except LLMCallError as e:
         return _handle_error("错误", str(e))
     except Exception as e:
         return _handle_error("未知错误", str(e))
@@ -1043,7 +781,7 @@ def main() -> int:
         commit_msg = (result or {}).get("commit_message") or ""
         # 如果 LLM 未返回 commit_message，视为结果不完整，显式报错而不是静默降级
         if not commit_msg.strip():
-            raise NetworkError("LLM 未返回 commit_message，无法提供提交信息建议")
+            raise LLMCallError("LLM 未返回 commit_message，无法提供提交信息建议")
         # 仅将建议写入 .git 目录，供 commit-msg 在格式错误时统一提示；
         # 不在 pre-commit 阶段直接打印，避免在正常提交路径制造额外噪音。
         _write_commit_suggestion(commit_msg)

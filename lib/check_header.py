@@ -3,7 +3,7 @@
 文件名: check_header.py
 描述: 源码文件头检测模块（多语言）
 创建日期: 2026年01月25日 15:32:00
-最后更新日期: 2026年02月06日 23:58:12
+最后更新日期: 2026年02月07日 00:40:00
 """
 
 import os
@@ -11,16 +11,21 @@ import subprocess
 import sys
 import re
 import argparse
-import json
-import asyncio
 from datetime import datetime
 from pathlib import Path
 
-# 颜色定义
-RED = "\033[0;31m"
-GREEN = "\033[0;32m"
-YELLOW = "\033[1;33m"
-NC = "\033[0m"
+from llm_client import (
+    RED,
+    GREEN,
+    YELLOW,
+    NC,
+    run_cmd,
+    repo_root,
+    git_dir,
+    load_llm_config,
+    call_llm,
+    strip_code_fences,
+)
 
 # 必需的文件头字段
 REQUIRED_FIELDS = ["文件名", "描述", "创建日期", "最后更新日期"]
@@ -201,7 +206,7 @@ def check_last_update_modified(filepath: str) -> tuple[bool, list[str]]:
 
     规则：
     - 只要文件内容有任何变更（任意 +/- 行），
-      就要求本次 diff 中也包含修改“最后更新日期”字段的行
+      就要求本次 diff 中也包含修改"最后更新日期"字段的行
     """
     try:
         result = subprocess.run(
@@ -237,7 +242,7 @@ def check_last_update_modified(filepath: str) -> tuple[bool, list[str]]:
             has_other_changes = True
 
     if has_other_changes and not has_last_update_change:
-        return False, ["文件内容已修改，但文件头中的“最后更新日期”未更新"]
+        return False, ["文件内容已修改，但文件头中的\u201c最后更新日期\u201d未更新"]
 
     return True, []
 
@@ -265,7 +270,7 @@ def _get_current_datetime_str() -> str:
 
 
 def _update_last_updated_field(filepath: str, new_datetime: str) -> bool:
-    """在文件头中更新“最后更新日期”字段，仅修改该字段，不动其他内容。
+    """在文件头中更新"最后更新日期"字段，仅修改该字段，不动其他内容。
 
     支持多种格式：
     - 英文冒号: `最后更新日期: 2026年01月01日 00:00:00`
@@ -323,106 +328,11 @@ def _update_last_updated_field(filepath: str, new_datetime: str) -> bool:
         return False
 
 
-def _get_repo_root() -> Path:
-    """Git 仓库根目录（支持独立项目 commit-hooks 或仓库内 scripts/hooks）"""
-    r = subprocess.run(
-        ["git", "rev-parse", "--show-toplevel"],
-        capture_output=True,
-        text=True,
-        check=False,
-        cwd=os.getcwd(),
-    )
-    if r.returncode != 0:
-        raise RuntimeError("无法获取 Git 仓库根目录，请确保在 Git 仓库内执行")
-    return Path(r.stdout.strip())
-
-
-def _load_llm_provider_config() -> dict:
-    """加载 LLM 配置（优先 COMMIT_HOOKS_LLM_CONFIG，其次钩子目录 commit-hooks.llm.toml）。"""
-    try:
-        import tomllib  # py>=3.11
-    except ImportError:
-        raise RuntimeError("tomllib 不可用（需要 Python 3.11+）")
-
-    hooks_root = Path(__file__).resolve().parents[1]
-    cfg_env = os.environ.get("COMMIT_HOOKS_LLM_CONFIG")
-    if cfg_env:
-        cfg_path = Path(cfg_env)
-        if not cfg_path.is_absolute():
-            cfg_path = hooks_root / cfg_env
-    else:
-        cfg_path = hooks_root / "commit-hooks.llm.toml"
-    if not cfg_path.exists():
-        raise RuntimeError(
-            f"LLM 配置文件不存在: {cfg_path}\n"
-            f"请在钩子目录创建 commit-hooks.llm.toml：{hooks_root}\n"
-            "或设置 COMMIT_HOOKS_LLM_CONFIG 指定配置文件路径（绝对路径或相对钩子目录）"
-        )
-
-    with open(cfg_path, "rb") as f:
-        config = tomllib.load(f)
-
-    provider_name = (config.get("global", {}) or {}).get("llm_provider")
-    if not provider_name:
-        raise RuntimeError(
-            f"LLM 配置缺失：请在 {cfg_path.name} 的 [global] 中设置 llm_provider"
-        )
-
-    provider_cfg = config.get(provider_name, {}) or {}
-    if not provider_cfg:
-        available = [k for k in config.keys() if k != "global"]
-        raise RuntimeError(
-            f"提供商 '{provider_name}' 配置不存在；可用提供商：{', '.join(available)}"
-        )
-
-    api_type = provider_cfg.get("api_type", "openai")
-    
-    # Base URL: 优先从环境变量读取（如果配置了 base_url_env）
-    base_url = provider_cfg.get("base_url")
-    base_url_env = provider_cfg.get("base_url_env")
-    if base_url_env:
-        env_url = os.getenv(base_url_env)
-        if env_url:
-            base_url = env_url
-
-    model = provider_cfg.get("model")
-    timeout = provider_cfg.get("timeout", 60)
-
-    api_key = provider_cfg.get("api_key")
-    if not api_key:
-        api_key_env = provider_cfg.get("api_key_env")
-        if api_key_env:
-            api_key = os.getenv(api_key_env)
-            if not api_key:
-                raise RuntimeError(
-                    f"API Key 环境变量未设置：{api_key_env}\n"
-                    f'例如：export {api_key_env}="your-api-key"'
-                )
-        else:
-            raise RuntimeError(
-                f"提供商 {provider_name} 缺少 api_key 或 api_key_env 配置"
-            )
-
-    if not base_url or not model:
-        raise RuntimeError(
-            f"提供商 {provider_name} 配置不完整（缺少 base_url 或 model）"
-        )
-
-    return {
-        "provider_name": provider_name,
-        "api_type": api_type,
-        "base_url": base_url,
-        "model": model,
-        "api_key": api_key,
-        "timeout": timeout,
-    }
-
-
-async def _async_llm_fix_last_updated(filepath: str, cfg: dict) -> bool:
+def _do_llm_fix_last_updated(filepath: str, cfg: dict) -> bool:
     """使用 LLM 修复文件头中的"最后更新日期"字段（当自动修复失败时使用）。
 
-    流程（参考 llm_fix_shellcheck.py）：
-    1. LLM 返回修复后的文件头片段
+    流程：
+    1. 构建 prompt，调用 LLM 返回修复后的文件头片段
     2. 本地精确替换文件头部分
     3. 使用 git diff --no-index 生成 patch
     4. 用 git apply --check 验证
@@ -432,7 +342,6 @@ async def _async_llm_fix_last_updated(filepath: str, cfg: dict) -> bool:
         True: 成功修复
         False: 修复失败
     """
-    import httpx
     import tempfile
 
     try:
@@ -453,13 +362,13 @@ async def _async_llm_fix_last_updated(filepath: str, cfg: dict) -> bool:
 
     current_dt = _get_current_datetime_str()
     filename = abs_filepath.name
-    # 计算相对于仓库根目录的路径（用于 patch 中的路径）；使用 Git 仓库根，兼容 commit-hooks 在任意层级（含子模块）
+    # 计算相对于仓库根目录的路径（用于 patch 中的路径）
     try:
-        repo_root = _get_repo_root()
-    except RuntimeError:
+        root = repo_root()
+    except Exception:
         return False
     try:
-        rel_path = str(abs_filepath.relative_to(repo_root))
+        rel_path = str(abs_filepath.relative_to(root))
     except ValueError:
         # 如果无法计算相对路径，使用原始文件路径
         rel_path = filepath
@@ -531,124 +440,29 @@ async def _async_llm_fix_last_updated(filepath: str, cfg: dict) -> bool:
         print(prompt)
         print("---")
 
-    api_type = cfg["api_type"]
-    base_url = cfg["base_url"]
-    model = cfg["model"]
-    api_key = cfg["api_key"]
-    timeout = cfg["timeout"]
-
     try:
-        if api_type == "anthropic":
-            api_url = f"{base_url}/v1/messages"
-            headers = {
-                "Content-Type": "application/json",
-                "x-api-key": api_key,
-                "anthropic-version": "2023-06-01",
-            }
-            body = {
-                "model": model,
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": 600,
-                "temperature": 0.2,
-            }
-        else:
-            api_url = f"{base_url}/chat/completions"
-            headers = {
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {api_key}",
-            }
-            body = {
-                "model": model,
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": 600,
-                "temperature": 0.2,
-            }
+        # 使用公共模块统一调用 LLM
+        fixed_header = call_llm(
+            prompt,
+            cfg,
+            max_tokens=600,
+            temperature=0.2,
+            log_prefix="header-fix",
+        )
 
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            max_retries = 3
-            base_delay = 1
-            for attempt in range(max_retries):
-                try:
-                    resp = await client.post(api_url, headers=headers, json=body)
-                    resp.raise_for_status()
-                    break
-                except httpx.HTTPStatusError as e:
-                    # 如果是 429 (Too Many Requests) 或 5xx (Server Error)，则尝试重试
-                    if e.response.status_code == 429 or e.response.status_code >= 500:
-                        if attempt < max_retries - 1:
-                            # 最小惊讶原则：打印重试信息以便用户知道发生了什么
-                            print(f"{YELLOW}[header-fix] HTTP {e.response.status_code}，正在重试 ({attempt + 1}/{max_retries})...{NC}")
-                            delay = base_delay * (2 ** attempt)  # 指数退避
-                            await asyncio.sleep(delay)
-                            continue
-                    
-                    # 其他错误或重试耗尽：打印完整错误信息并抛出
-                    print(f"{RED}[header-fix] HTTP 错误: {e.response.status_code}{NC}")
-                    print(f"响应内容: {e.response.text}")
-                    raise
-                except httpx.ConnectError:
-                    # 连接错误也尝试重试
-                    if attempt < max_retries - 1:
-                        print(f"{YELLOW}[header-fix] 连接错误，正在重试 ({attempt + 1}/{max_retries})...{NC}")
-                        delay = base_delay * (2 ** attempt)
-                        await asyncio.sleep(delay)
-                        continue
-                    raise
-
-            result = resp.json()
-
-        # 打印原始响应（用于调试）
+        # 调试：打印 LLM 返回的原始内容
         if os.environ.get("COMMIT_HOOKS_LLM_REVIEW_PRINT_PROMPT", "").lower() in (
             "1",
             "true",
             "yes",
         ):
-            print(f"{YELLOW}[header-fix] LLM 原始响应：{NC}")
-            print("---")
-            print(json.dumps(result, ensure_ascii=False, indent=2))
-            print("---")
-
-        # 解析响应
-        if "choices" in result and result["choices"]:
-            msg = result["choices"][0].get("message") or {}
-            fixed_header = (msg.get("content") or msg.get("text") or "").strip()
-        elif "content" in result and result["content"]:
-            fixed_header = ""
-            for block in result["content"]:
-                if isinstance(block, str):
-                    fixed_header = block.strip()
-                elif isinstance(block, dict):
-                    t = (block.get("text") or block.get("content") or "").strip()
-                    if t:
-                        fixed_header = t
-        else:
-            if os.environ.get("DEBUG"):
-                print(f"DEBUG: 无法从响应中提取内容，响应格式: {list(result.keys())}")
-            return False
-
-        # 打印解析后的文件头内容
-        if os.environ.get("COMMIT_HOOKS_LLM_REVIEW_PRINT_PROMPT", "").lower() in (
-            "1",
-            "true",
-            "yes",
-        ):
-            print(f"{YELLOW}[header-fix] 解析后的文件头内容：{NC}")
+            print(f"{YELLOW}[header-fix] LLM 返回的原始内容：{NC}")
             print("---")
             print(fixed_header)
             print("---")
 
         # 去掉可能的代码块标记
-        if fixed_header.startswith("```"):
-            lines_fixed = fixed_header.splitlines()
-            out_lines = []
-            in_block = False
-            for line in lines_fixed:
-                if line.startswith("```"):
-                    in_block = not in_block
-                    continue
-                if in_block or not line.startswith("```"):
-                    out_lines.append(line)
-            fixed_header = "\n".join(out_lines).strip()
+        fixed_header = strip_code_fences(fixed_header)
 
         if not fixed_header:
             return False
@@ -666,7 +480,7 @@ async def _async_llm_fix_last_updated(filepath: str, cfg: dict) -> bool:
             # 未产生变更
             return False
 
-        # 使用 git diff --no-index 生成 patch（参考 llm_fix_shellcheck.py）
+        # 使用 git diff --no-index 生成 patch
         with tempfile.TemporaryDirectory() as tmpdir:
             old_file = Path(tmpdir) / "old"
             new_file = Path(tmpdir) / "new"
@@ -674,7 +488,7 @@ async def _async_llm_fix_last_updated(filepath: str, cfg: dict) -> bool:
             new_file.write_text(new_content, encoding="utf-8")
 
             # git diff --no-index 生成 unified diff
-            diff_result = subprocess.run(
+            diff_result = run_cmd(
                 [
                     "git",
                     "diff",
@@ -683,9 +497,6 @@ async def _async_llm_fix_last_updated(filepath: str, cfg: dict) -> bool:
                     str(old_file),
                     str(new_file),
                 ],
-                capture_output=True,
-                text=True,
-                check=False,
             )
             if diff_result.returncode not in (0, 1):
                 # git diff --no-index 在文件不同时返回 1（正常），其他错误码才异常
@@ -710,36 +521,21 @@ async def _async_llm_fix_last_updated(filepath: str, cfg: dict) -> bool:
                     result_lines.append(line)
             final_patch = "".join(result_lines)
 
-            # 验证 patch（git apply --check）
-            git_dir_result = subprocess.run(
-                ["git", "rev-parse", "--git-dir"],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            git_dir = Path((git_dir_result.stdout or "").strip())
-            if not git_dir:
+            # 验证并应用 patch
+            try:
+                gd = git_dir()
+            except Exception:
                 return False
 
-            tmp_patch = git_dir / "llm_fix_header.patch"
+            tmp_patch = gd / "llm_fix_header.patch"
             try:
                 tmp_patch.write_text(final_patch, encoding="utf-8")
-                check_result = subprocess.run(
-                    ["git", "apply", "--check", str(tmp_patch)],
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                )
+                check_result = run_cmd(["git", "apply", "--check", str(tmp_patch)])
                 if check_result.returncode != 0:
                     return False
 
                 # 应用 patch
-                apply_result = subprocess.run(
-                    ["git", "apply", str(tmp_patch)],
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                )
+                apply_result = run_cmd(["git", "apply", str(tmp_patch)])
                 if apply_result.returncode != 0:
                     return False
 
@@ -752,24 +548,27 @@ async def _async_llm_fix_last_updated(filepath: str, cfg: dict) -> bool:
                         print(f"DEBUG: failed to unlink patch: {e}")
 
     except Exception as e:
-        if os.environ.get("DEBUG") or os.environ.get("COMMIT_HOOKS_LLM_REVIEW_PRINT_PROMPT"):
+        if os.environ.get("DEBUG") or os.environ.get(
+            "COMMIT_HOOKS_LLM_REVIEW_PRINT_PROMPT"
+        ):
             print(f"{RED}[header-fix] 异常详情：{NC}")
             print(f"{e}")
             import traceback
+
             traceback.print_exc()
         return False
 
 
 def _llm_fix_last_updated(filepath: str) -> bool:
-    """同步包装器：调用异步 LLM 修复函数。"""
+    """使用 LLM 修复文件头中的最后更新日期字段（同步入口）。"""
     try:
-        cfg = _load_llm_provider_config()
+        cfg = load_llm_config()
     except Exception as e:
         # 未配置 LLM 或配置无效时明确提示，避免用户误以为大模型已调用但失败
         print(f"{YELLOW}[header-fix]{NC} LLM 未配置或配置无效，跳过 LLM 修复: {e}")
         return False
     try:
-        return asyncio.run(_async_llm_fix_last_updated(filepath, cfg))
+        return _do_llm_fix_last_updated(filepath, cfg)
     except Exception as e:
         if os.environ.get("DEBUG"):
             print(f"DEBUG: exception in header check: {e}")
@@ -781,8 +580,8 @@ def main() -> int:
 
     模式说明：
     - 默认（无参数）: 作为 pre-commit 钩子，仅做检测，不修改文件。
-    - --fix-last-updated: 仅针对已暂存的“已修改文件”，自动更新文件头中的“最后更新日期”字段。
-      * 只处理存在规范文件头且 diff 中缺失“最后更新日期”变更的文件
+    - --fix-last-updated: 仅针对已暂存的"已修改文件"，自动更新文件头中的"最后更新日期"字段。
+      * 只处理存在规范文件头且 diff 中缺失"最后更新日期"变更的文件
       * 不为缺失文件头的新增文件补充头部（保持由用户或其他工具处理）
     """
     parser = argparse.ArgumentParser(
@@ -792,7 +591,7 @@ def main() -> int:
     parser.add_argument(
         "--fix-last-updated",
         action="store_true",
-        help="仅针对已暂存的已修改文件，自动更新文件头中的“最后更新日期”字段",
+        help="仅针对已暂存的已修改文件，自动更新文件头中的\u201c最后更新日期\u201d字段",
     )
     args = parser.parse_args()
 
@@ -815,19 +614,21 @@ def main() -> int:
             print(f"{GREEN}[pre-commit]{NC} 无需要检查的文件，跳过文件头检测")
             return 0
 
-    # 修复模式：仅修复已修改文件的“最后更新日期”字段
+    # 修复模式：仅修复已修改文件的"最后更新日期"字段
     if args.fix_last_updated:
         targets: list[str] = []
         for filepath in modified_files:
             if filepath.endswith("__init__.py"):
                 continue
-            # 仅当存在“最后更新日期未更新”的违规时才尝试修复
+            # 仅当存在"最后更新日期未更新"的违规时才尝试修复
             valid, errors = check_last_update_modified(filepath)
             if not valid and any("最后更新日期" in err for err in (errors or [])):
                 targets.append(filepath)
 
         if not targets:
-            print(f"{GREEN}[header-fix]{NC} 未发现需要修复“最后更新日期”的文件")
+            print(
+                f"{GREEN}[header-fix]{NC} 未发现需要修复\u201c最后更新日期\u201d的文件"
+            )
             return 0
 
         current_dt = _get_current_datetime_str()
@@ -852,7 +653,9 @@ def main() -> int:
                 if os.environ.get("DEBUG"):
                     print(f"DEBUG: git add failed: {e}")
 
-            print(f"{GREEN}[header-fix]{NC} 已自动更新以下文件的“最后更新日期”：")
+            print(
+                f"{GREEN}[header-fix]{NC} 已自动更新以下文件的\u201c最后更新日期\u201d："
+            )
             for fp in fixed:
                 print(f"  - {fp}")
 
@@ -872,7 +675,7 @@ def main() -> int:
 
             if has_tty:
                 print(
-                    f"{YELLOW}是否使用 LLM 修复这些文件的“最后更新日期”字段?{NC} [Y/n] ",
+                    f"{YELLOW}是否使用 LLM 修复这些文件的\u201c最后更新日期\u201d字段?{NC} [Y/n] ",
                     end="",
                     flush=True,
                 )
@@ -904,7 +707,7 @@ def main() -> int:
 
                         if llm_fixed:
                             print(
-                                f"{GREEN}[header-fix]{NC} LLM 已修复以下文件的“最后更新日期”："
+                                f"{GREEN}[header-fix]{NC} LLM 已修复以下文件的\u201c最后更新日期\u201d："
                             )
                             for fp in llm_fixed:
                                 print(f"  - {fp}")
@@ -980,7 +783,7 @@ def main() -> int:
         count_last = len(last_updated_violations)
         count_new = len(new_file_violations)
         print("问题分类统计:")
-        print(f"  1) 仅“最后更新日期”未更新的文件: {count_last} 个")
+        print(f"  1) 仅\u201c最后更新日期\u201d未更新的文件: {count_last} 个")
         print(f"  2) 新建文件缺少规范文件头的文件: {count_new} 个")
         print(
             f"  3) 两类问题同时存在的场景：整体来看即同时存在以上 1) 与 2) 两种类型的文件"
@@ -1107,6 +910,7 @@ def main() -> int:
         print(
             f"{RED}提示：{NC}修复文件头后重新提交，或使用 git commit --no-verify 跳过所有检查"
         )
+        print(f"提示：COMMIT_HOOKS_HELP=1 git commit 可查看所有 hook 参数用法")
         return 1
 
     print(f"{GREEN}[pre-commit]{NC} 文件头检测通过")

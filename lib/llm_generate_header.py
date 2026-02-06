@@ -3,204 +3,27 @@
 文件名: llm_generate_header.py
 描述: 使用 LLM 为缺少文件头的新建文件生成规范文件头（显式命令，由 check_header.py 调用或独立运行）
 创建日期: 2026年01月29日 17:42:20
-最后更新日期: 2026年02月06日 23:58:12
+最后更新日期: 2026年02月07日 00:40:00
 """
 
 from __future__ import annotations
 
 import argparse
-import json
-import os
-import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import List
 
-RED = "\033[0;31m"
-GREEN = "\033[0;32m"
-YELLOW = "\033[1;33m"
-NC = "\033[0m"
-
-
-class ConfigurationError(Exception):
-    """配置错误异常（阻断执行）"""
-
-
-class RuntimeErrorGen(Exception):
-    """运行时错误（阻断执行）"""
-
-
-def _run(cmd: List[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(cmd, capture_output=True, text=True, check=False)
-
-
-def _repo_root() -> Path:
-    result = _run(["git", "rev-parse", "--show-toplevel"])
-    root = (result.stdout or "").strip()
-    if not root:
-        raise RuntimeErrorGen("未在 Git 仓库中运行（无法解析仓库根目录）")
-    return Path(root)
-
-
-def _hooks_root() -> Path:
-    """钩子脚本所在目录（commit-hooks 根目录）"""
-    return Path(__file__).resolve().parents[1]
-
-
-def _load_llm_provider_config() -> Dict[str, Any]:
-    """加载 LLM 配置（优先 COMMIT_HOOKS_LLM_CONFIG，其次钩子目录 commit-hooks.llm.toml）。
-
-    与 check_header.py / llm_review.py 使用相同的配置加载逻辑（SSOT）。
-    """
-    try:
-        import tomllib  # py>=3.11
-    except ImportError as e:
-        raise ConfigurationError(f"tomllib 不可用（需要 Python 3.11+）: {e}")
-
-    hooks_dir = _hooks_root()
-    cfg_env = os.environ.get("COMMIT_HOOKS_LLM_CONFIG")
-    if cfg_env:
-        cfg_path = Path(cfg_env)
-        if not cfg_path.is_absolute():
-            cfg_path = hooks_dir / cfg_env
-    else:
-        cfg_path = hooks_dir / "commit-hooks.llm.toml"
-
-    if not cfg_path.exists():
-        raise ConfigurationError(
-            f"LLM 配置文件不存在: {cfg_path}\n"
-            f"请在钩子目录创建 commit-hooks.llm.toml：{hooks_dir}\n"
-            "或设置 COMMIT_HOOKS_LLM_CONFIG 指定配置文件路径（绝对路径或相对钩子目录）"
-        )
-
-    data = tomllib.loads(cfg_path.read_text(encoding="utf-8"))
-    provider_name = (data.get("global", {}) or {}).get("llm_provider")
-    if not provider_name:
-        raise ConfigurationError(
-            f"LLM 配置缺失：请在 {cfg_path.name} 的 [global] 中设置 llm_provider"
-        )
-
-    provider_cfg = data.get(provider_name, {}) or {}
-    if not provider_cfg:
-        available = [k for k in data.keys() if k != "global"]
-        raise ConfigurationError(
-            f"提供商 '{provider_name}' 配置不存在；可用提供商：{', '.join(available)}"
-        )
-
-    api_type = provider_cfg.get("api_type", "openai")
-    base_url = provider_cfg.get("base_url")
-    model = provider_cfg.get("model")
-    timeout = provider_cfg.get("timeout", 60)
-
-    api_key = provider_cfg.get("api_key")
-    if not api_key:
-        api_key_env = provider_cfg.get("api_key_env")
-        if api_key_env:
-            api_key = os.getenv(api_key_env)
-            if not api_key:
-                raise ConfigurationError(
-                    f"API Key 环境变量未设置：{api_key_env}\n"
-                    f'例如：export {api_key_env}="your-api-key"'
-                )
-        else:
-            raise ConfigurationError(
-                f"提供商 {provider_name} 缺少 api_key 或 api_key_env 配置"
-            )
-
-    if not base_url or not model:
-        raise ConfigurationError(
-            f"提供商 {provider_name} 配置不完整（缺少 base_url 或 model）"
-        )
-
-    return {
-        "provider_name": provider_name,
-        "api_type": api_type,
-        "base_url": base_url,
-        "model": model,
-        "api_key": api_key,
-        "timeout": timeout,
-    }
-
-
-def _strip_code_fences(text: str) -> str:
-    """去掉可能包裹的 ``` 代码块标记，保留内部内容。"""
-    t = text.strip()
-    if not t.startswith("```"):
-        return t
-    lines = t.splitlines()
-    out: List[str] = []
-    in_block = False
-    for line in lines:
-        if line.startswith("```"):
-            in_block = not in_block
-            continue
-        if in_block:
-            out.append(line)
-    return "\n".join(out).strip()
-
-
-async def _async_call_llm(prompt: str, cfg: Dict[str, Any]) -> str:
-    import httpx
-
-    api_type = cfg["api_type"]
-    base_url = cfg["base_url"]
-    model = cfg["model"]
-    api_key = cfg["api_key"]
-    timeout = cfg["timeout"]
-
-    if api_type == "anthropic":
-        api_url = f"{base_url}/v1/messages"
-        headers = {
-            "Content-Type": "application/json",
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01",
-        }
-        body = {
-            "model": model,
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 400,
-            "temperature": 0.2,
-        }
-    else:
-        api_url = f"{base_url}/chat/completions"
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
-        }
-        body = {
-            "model": model,
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 400,
-            "temperature": 0.2,
-        }
-
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        resp = await client.post(api_url, headers=headers, json=body)
-        resp.raise_for_status()
-        result = resp.json()
-
-    # 统一解析 content
-    if "choices" in result and result["choices"]:
-        msg = result["choices"][0].get("message") or {}
-        content = (msg.get("content") or msg.get("text") or "").strip()
-    elif "content" in result and result["content"]:
-        content = ""
-        for block in result["content"]:
-            if isinstance(block, str):
-                content = block.strip()
-            elif isinstance(block, dict):
-                t = (block.get("text") or block.get("content") or "").strip()
-                if t:
-                    content = t
-    else:  # pragma: no cover - 防御性分支
-        raise RuntimeErrorGen(
-            f"LLM 响应格式异常: {json.dumps(result, ensure_ascii=False)[:800]}"
-        )
-
-    content = content.strip()
-    if not content:
-        raise RuntimeErrorGen("LLM 响应为空")
-    return _strip_code_fences(content)
+from llm_client import (
+    ConfigurationError,
+    RED,
+    GREEN,
+    YELLOW,
+    NC,
+    repo_root,
+    load_llm_config,
+    call_llm,
+    strip_code_fences,
+)
 
 
 def _detect_header_group(path: Path) -> str:
@@ -279,12 +102,12 @@ def _insert_header(path: Path, header: str) -> None:
     try:
         text = path.read_text(encoding="utf-8")
     except Exception as e:
-        raise RuntimeErrorGen(f"读取文件失败: {path}: {e}")
+        raise RuntimeError(f"读取文件失败: {path}: {e}")
 
     # 如果文件已经包含"文件名: "且位于前几行，则认为已有文件头，避免重复插入
     head = text[:400]
     if "文件名:" in head and "创建日期:" in head and "最后更新日期:" in head:
-        raise RuntimeErrorGen(f"文件已存在文件头，不执行生成: {path}")
+        raise RuntimeError(f"文件已存在文件头，不执行生成: {path}")
 
     lines = text.splitlines(keepends=True)
 
@@ -324,16 +147,14 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
-        cfg = _load_llm_provider_config()
+        cfg = load_llm_config()
     except ConfigurationError as e:
         print(f"{RED}[llm-header]{NC} 配置错误: {e}")
         return 1
 
-    root = _repo_root()
+    root = repo_root()
     ok_files: List[str] = []
     failed_files: List[str] = []
-
-    import asyncio
 
     for f in args.files:
         path = Path(f)
@@ -360,7 +181,14 @@ def main() -> int:
             print("--- end prompt ---")
 
         try:
-            header = asyncio.run(_async_call_llm(prompt, cfg))
+            raw = call_llm(
+                prompt,
+                cfg,
+                max_tokens=400,
+                temperature=0.2,
+                log_prefix="llm-header",
+            )
+            header = strip_code_fences(raw)
             _insert_header(path, header)
             ok_files.append(rel_path)
         except Exception as e:

@@ -3,73 +3,48 @@
 文件名: llm_fix_shellcheck.py
 描述: 显式调用 LLM 生成并应用补丁，仅修复 shellcheck 报错（禁止改其他逻辑）
 创建日期: 2026年01月29日 02:46:27
-最后更新日期: 2026年02月05日 09:41:43
+最后更新日期: 2026年02月07日 00:40:00
 """
 
 from __future__ import annotations
 
 import argparse
-import asyncio
 import json
-import os
 import re
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
-
-RED = "\033[0;31m"
-GREEN = "\033[0;32m"
-YELLOW = "\033[1;33m"
-NC = "\033[0m"
+from llm_client import (
+    RED,
+    GREEN,
+    YELLOW,
+    NC,
+    run_cmd,
+    repo_root,
+    git_dir,
+    load_llm_config,
+    call_llm,
+    strip_code_fences,
+)
 
 REQUEST_TIMEOUT_CAP = 180
 
 
-class ConfigurationError(Exception):
-    """配置错误异常（阻断执行）"""
-
-
 class RuntimeErrorFix(Exception):
-    """运行时错误（阻断执行）"""
-
-
-def _run(cmd: List[str], check: bool = False) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(cmd, capture_output=True, text=True, check=check)
-
-
-def _repo_root() -> Path:
-    r = _run(["git", "rev-parse", "--show-toplevel"], check=False)
-    root = (r.stdout or "").strip()
-    if not root:
-        raise RuntimeErrorFix("未在 Git 仓库中运行（无法解析仓库根目录）")
-    return Path(root)
-
-
-def _git_dir() -> Path:
-    """获取 Git 目录路径（兼容 worktree / .git 为文件的情况）。"""
-    r = _run(["git", "rev-parse", "--git-dir"], check=False)
-    git_dir = (r.stdout or "").strip()
-    if not git_dir:
-        raise RuntimeErrorFix("无法解析 .git 目录（git rev-parse --git-dir 为空）")
-    p = Path(git_dir)
-    if not p.is_absolute():
-        p = _repo_root() / p
-    return p
+    """运行时错误（非 LLM 相关，如补丁应用失败）"""
 
 
 def _get_staged_shell_files() -> List[str]:
-    r = _run(
+    r = run_cmd(
         ["git", "diff", "--cached", "--name-only", "--diff-filter=ACM"],
-        check=False,
     )
     files = [x.strip() for x in (r.stdout or "").splitlines() if x.strip()]
     return [f for f in files if f.endswith(".sh") or f.endswith(".bash")]
 
 
 def _shellcheck_available() -> bool:
-    r = _run(["shellcheck", "--version"], check=False)
+    r = run_cmd(["shellcheck", "--version"])
     return r.returncode == 0
 
 
@@ -78,7 +53,7 @@ def _run_shellcheck(files: List[str]) -> Tuple[List[str], Dict[str, str]]:
     error_files: List[str] = []
     per_file_output: Dict[str, str] = {}
     for f in files:
-        r = _run(["shellcheck", f], check=False)
+        r = run_cmd(["shellcheck", f])
         if r.returncode != 0:
             error_files.append(f)
             out = (r.stdout or "") + (r.stderr or "")
@@ -183,203 +158,6 @@ def _extract_code_snippet(
     return snippet, start + 1, end
 
 
-def _load_llm_provider_config() -> Dict[str, Any]:
-    """加载 LLM 配置（与 llm_review.py 保持一致）
-
-    配置文件查找顺序：
-    1. 环境变量 COMMIT_HOOKS_LLM_CONFIG 指定的路径
-    2. 钩子目录下的 commit-hooks.llm.toml
-    """
-    try:
-        import tomllib  # py>=3.11
-    except Exception as e:
-        raise ConfigurationError(f"tomllib 不可用: {e}")
-
-    # 获取钩子根目录（lib 的父目录）
-    hooks_root = Path(__file__).resolve().parents[1]
-
-    # 查找配置文件
-    cfg_env = os.environ.get("COMMIT_HOOKS_LLM_CONFIG")
-    if cfg_env:
-        cfg = Path(cfg_env)
-        if not cfg.is_absolute():
-            cfg = hooks_root / cfg_env
-    else:
-        cfg = hooks_root / "commit-hooks.llm.toml"
-
-    if not cfg.exists():
-        raise ConfigurationError(
-            f"LLM 配置文件不存在: {cfg}\n"
-            f"请在钩子目录创建 commit-hooks.llm.toml：{hooks_root}\n"
-            "或设置环境变量 COMMIT_HOOKS_LLM_CONFIG 指定配置文件路径（绝对路径或相对钩子目录）"
-        )
-
-    data = tomllib.loads(cfg.read_text(encoding="utf-8"))
-    provider_name = (data.get("global", {}) or {}).get("llm_provider")
-    if not provider_name:
-        raise ConfigurationError(
-            f"LLM 配置缺失\n"
-            f"请在 {cfg.name} 的 [global] 部分添加：\n"
-            '  llm_provider = "anthropic"  # 或其他提供商名称'
-        )
-    provider_cfg = data.get(provider_name, {}) or {}
-    if not provider_cfg:
-        available = [k for k in data.keys() if k != "global"]
-        raise ConfigurationError(
-            f"提供商 '{provider_name}' 配置不存在\n"
-            f"可用提供商：{', '.join(available)}"
-        )
-
-    api_type = provider_cfg.get("api_type", "openai")
-    
-    # Base URL: 优先从环境变量读取（如果配置了 base_url_env）
-    base_url = provider_cfg.get("base_url")
-    base_url_env = provider_cfg.get("base_url_env")
-    if base_url_env:
-        env_url = os.getenv(base_url_env)
-        if env_url:
-            base_url = env_url
-
-    model = provider_cfg.get("model")
-    timeout = provider_cfg.get("timeout", 60)
-    request_timeout = min(timeout, REQUEST_TIMEOUT_CAP)
-
-    api_key = provider_cfg.get("api_key")
-    if not api_key:
-        api_key_env = provider_cfg.get("api_key_env")
-        if api_key_env:
-            api_key = os.getenv(api_key_env)
-            if not api_key:
-                raise ConfigurationError(
-                    f"API Key 环境变量未设置\n"
-                    f"请设置环境变量：{api_key_env}\n"
-                    f'例如：export {api_key_env}="your-api-key"'
-                )
-        else:
-            raise ConfigurationError(
-                f"提供商 {provider_name} 缺少 api_key 或 api_key_env 配置"
-            )
-
-    if not base_url or not model:
-        raise ConfigurationError(
-            f"提供商 {provider_name} 配置不完整（缺少 base_url 或 model）"
-        )
-
-    return {
-        "provider_name": provider_name,
-        "api_type": api_type,
-        "base_url": base_url,
-        "model": model,
-        "api_key": api_key,
-        "timeout": timeout,
-        "request_timeout": request_timeout,
-    }
-
-
-def _format_raw_response(obj: Any, max_len: int = 4000) -> str:
-    try:
-        raw = json.dumps(obj, ensure_ascii=False, indent=2)
-    except Exception:
-        raw = repr(obj)
-    return raw[:max_len] + ("\n... (已截断)" if len(raw) > max_len else "")
-
-
-def _extract_text_content(result: Dict[str, Any]) -> str:
-    if "choices" in result and result["choices"]:
-        msg = result["choices"][0].get("message") or {}
-        return ((msg.get("content") or msg.get("text") or "") or "").strip()
-    if "content" in result and result["content"]:
-        content = ""
-        for block in result["content"]:
-            if isinstance(block, str):
-                content = block.strip()
-            elif isinstance(block, dict):
-                t = ((block.get("text") or block.get("content") or "") or "").strip()
-                if t:
-                    content = t
-        return content.strip()
-    raise RuntimeErrorFix(
-        f"API 响应格式异常：缺少 choices 或 content\n响应原文:\n{_format_raw_response(result)}"
-    )
-
-
-async def _async_call_llm(prompt: str, cfg: Dict[str, Any]) -> str:
-    import httpx
-
-    api_type = cfg["api_type"]
-    base_url = cfg["base_url"]
-    model = cfg["model"]
-    api_key = cfg["api_key"]
-    timeout = cfg["timeout"]
-    request_timeout = cfg["request_timeout"]
-
-    if api_type == "anthropic":
-        api_url = f"{base_url}/v1/messages"
-        headers = {
-            "Content-Type": "application/json",
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01",
-        }
-        body = {
-            "model": model,
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 2400,
-            "temperature": 0.2,
-        }
-    else:
-        api_url = f"{base_url}/chat/completions"
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
-        }
-        body = {
-            "model": model,
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 2400,
-            "temperature": 0.2,
-        }
-
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        max_retries = 3
-        base_delay = 1
-        for attempt in range(max_retries):
-            try:
-                resp = await asyncio.wait_for(
-                    client.post(api_url, headers=headers, json=body),
-                    timeout=request_timeout,
-                )
-                resp.raise_for_status()
-                break
-            except httpx.HTTPStatusError as e:
-                # 429 或 5xx 重试
-                if e.response.status_code == 429 or e.response.status_code >= 500:
-                    if attempt < max_retries - 1:
-                        print(f"{YELLOW}[llm-fix] HTTP {e.response.status_code}，正在重试 ({attempt + 1}/{max_retries})...{NC}")
-                        delay = base_delay * (2 ** attempt)
-                        await asyncio.sleep(delay)
-                        continue
-                
-                # 最小惊讶原则：LLM 调用失败时无条件打印错误
-                print(f"{RED}[llm-fix] HTTP 错误: {e.response.status_code}{NC}")
-                print(f"响应内容: {e.response.text}")
-                raise
-            except httpx.ConnectError:
-                if attempt < max_retries - 1:
-                    print(f"{YELLOW}[llm-fix] 连接错误，正在重试 ({attempt + 1}/{max_retries})...{NC}")
-                    delay = base_delay * (2 ** attempt)
-                    await asyncio.sleep(delay)
-                    continue
-                raise
-
-        result = resp.json()
-        text = _extract_text_content(result)
-        if not text:
-            raise RuntimeErrorFix(
-                f"API 响应无有效文本内容\n响应原文:\n{_format_raw_response(result)}"
-            )
-        return text
-
-
 def _build_prompt_for_file(
     rel_path: str,
     file_content: str,
@@ -453,7 +231,7 @@ def _build_prompt_for_file(
 ## 强制约束（必须遵守）
 1. 只允许修复下述代码片段中的 shellcheck 错误（SC2046/SC2086 等）。
 2. 禁止做任何重构、优化、重命名、格式美化、日志调整、行为改变。
-3. 禁止改变脚本逻辑语义：只做“让 shellcheck 通过”的最小变更。
+3. 禁止改变脚本逻辑语义：只做"让 shellcheck 通过"的最小变更。
 4. 你的输出必须是 JSON 数组，每个元素对应一个片段的修复结果。
 
 ## 输出格式要求
@@ -476,23 +254,6 @@ def _build_prompt_for_file(
 """
 
 
-def _strip_code_fences(text: str) -> str:
-    """去掉可能包裹的 ``` 代码块标记，保留内部内容。"""
-    t = text.strip()
-    if not t.startswith("```"):
-        return t
-    lines = t.splitlines()
-    out: List[str] = []
-    in_block = False
-    for line in lines:
-        if line.startswith("```"):
-            in_block = not in_block
-            continue
-        if in_block:
-            out.append(line)
-    return "\n".join(out).strip()
-
-
 def _parse_patch_touched_files(patch_text: str) -> Tuple[List[str], bool]:
     touched: List[str] = []
     has_new_file = False
@@ -509,22 +270,22 @@ def _parse_patch_touched_files(patch_text: str) -> Tuple[List[str], bool]:
 
 
 def _apply_patch(patch_text: str) -> None:
-    git_dir = _git_dir()
-    tmp = git_dir / "llm_fix_shellcheck.patch"
+    gd = git_dir()
+    tmp = gd / "llm_fix_shellcheck.patch"
     try:
         tmp.write_text(patch_text, encoding="utf-8")
     except Exception as e:
         raise RuntimeErrorFix(f"无法写入临时 patch 文件: {e}")
 
-    check = _run(["git", "apply", "--check", str(tmp)], check=False)
+    check = run_cmd(["git", "apply", "--check", str(tmp)])
     if check.returncode != 0:
         raise RuntimeErrorFix(
             f"git apply --check 失败:\n{(check.stderr or check.stdout or '').strip()}"
         )
-    apply = _run(["git", "apply", str(tmp)], check=False)
-    if apply.returncode != 0:
+    apply_result = run_cmd(["git", "apply", str(tmp)])
+    if apply_result.returncode != 0:
         raise RuntimeErrorFix(
-            f"git apply 失败:\n{(apply.stderr or apply.stdout or '').strip()}"
+            f"git apply 失败:\n{(apply_result.stderr or apply_result.stdout or '').strip()}"
         )
 
 
@@ -574,12 +335,12 @@ def main() -> int:
         print(f"  - {f}")
     print()
 
-    cfg = _load_llm_provider_config()
+    cfg = load_llm_config(request_timeout_cap=REQUEST_TIMEOUT_CAP)
     print(
         f"{YELLOW}[llm-fix]{NC} 调用模型: {cfg['provider_name']} / {cfg['model']}（仅修复 shellcheck）"
     )
 
-    root = _repo_root()
+    root = repo_root()
     all_patches: List[str] = []
 
     for rel_path in error_files:
@@ -603,13 +364,19 @@ def main() -> int:
             print("---")
 
         try:
-            text = asyncio.run(_async_call_llm(prompt, cfg))
+            text = call_llm(
+                prompt,
+                cfg,
+                max_tokens=2400,
+                temperature=0.2,
+                log_prefix="llm-fix",
+            )
         except Exception as e:
             print(f"{RED}[llm-fix]{NC} LLM 调用失败: {e}")
             return 1
 
         # 解析 LLM 返回的 JSON 数组
-        text_clean = _strip_code_fences(text)
+        text_clean = strip_code_fences(text)
         try:
             fixed_snippets = json.loads(text_clean)
             if not isinstance(fixed_snippets, list):
@@ -683,7 +450,7 @@ def main() -> int:
             new_file.write_text(new_content, encoding="utf-8")
 
             # git diff --no-index 生成 unified diff（默认 -U3，足够用于 git apply）
-            diff_result = _run(
+            diff_result = run_cmd(
                 [
                     "git",
                     "diff",
@@ -692,7 +459,6 @@ def main() -> int:
                     str(old_file),
                     str(new_file),
                 ],
-                check=False,
             )
             if diff_result.returncode not in (0, 1):
                 # git diff --no-index 在文件不同时返回 1（正常），其他错误码才异常
@@ -750,10 +516,10 @@ def main() -> int:
 
     try:
         if args.no_apply:
-            git_dir = _git_dir()
-            tmp_check = git_dir / "llm_fix_shellcheck.preview.patch"
+            gd = git_dir()
+            tmp_check = gd / "llm_fix_shellcheck.preview.patch"
             tmp_check.write_text(patch, encoding="utf-8")
-            r = _run(["git", "apply", "--check", str(tmp_check)], check=False)
+            r = run_cmd(["git", "apply", "--check", str(tmp_check)])
             if r.returncode != 0:
                 raise RuntimeErrorFix((r.stderr or r.stdout or "").strip())
             print(f"{GREEN}[llm-fix]{NC} patch 校验通过（--no-apply 未落地）")
@@ -772,7 +538,7 @@ def main() -> int:
         print(out2)
         return 1
 
-    _run(["git", "add", "--"] + error_files, check=False)
+    run_cmd(["git", "add", "--"] + error_files)
     print(f"{GREEN}[llm-fix]{NC} 修复完成：shellcheck 通过，已 git add")
     return 0
 
