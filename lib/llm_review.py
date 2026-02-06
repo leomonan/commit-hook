@@ -3,7 +3,7 @@
 文件名: llm_review.py
 描述: LLM 辅助代码审查模块
 创建日期: 2026年01月25日 15:32:00
-最后更新日期: 2026年02月07日 00:40:00
+最后更新日期: 2026年02月07日 01:22:20
 """
 
 import hashlib
@@ -782,9 +782,11 @@ def main() -> int:
         # 如果 LLM 未返回 commit_message，视为结果不完整，显式报错而不是静默降级
         if not commit_msg.strip():
             raise LLMCallError("LLM 未返回 commit_message，无法提供提交信息建议")
+        # 构建完整的 commit message：subject + summary（供用户直接复制使用）
+        full_commit_msg = f"{commit_msg.strip()}\n{summary.strip()}"
         # 仅将建议写入 .git 目录，供 commit-msg 在格式错误时统一提示；
         # 不在 pre-commit 阶段直接打印，避免在正常提交路径制造额外噪音。
-        _write_commit_suggestion(commit_msg)
+        _write_commit_suggestion(full_commit_msg)
         return 0
 
     # 将问题按确定性拆分：certain → 硬阻断；uncertain → 交互确认

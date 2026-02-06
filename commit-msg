@@ -2,7 +2,7 @@
 # 文件名: commit-msg
 # 描述: commit message 格式校验钩子
 # 创建日期: 2026年01月25日 15:32:00
-# 最后更新日期: 2026年02月04日 23:29:27
+# 最后更新日期: 2026年02月07日 01:22:20
 
 set -e
 
@@ -119,12 +119,20 @@ if ! echo "$COMMIT_MSG" | grep -qE "$COMMIT_MSG_PATTERN"; then
     #  echo ""
     # 如果存在 LLM Review 建议的 commit message，则在此处展示，帮助用户快速修正
     if [[ -n "$LLM_SUGGEST_FILE" && -f "$LLM_SUGGEST_FILE" ]]; then
-        SUGGEST_MSG="$(cat "$LLM_SUGGEST_FILE" | head -1 | tr -d '\r\n')"
+        # 读取完整的建议（可能包含多行：subject + summary）
+        SUGGEST_MSG="$(cat "$LLM_SUGGEST_FILE" | tr -d '\r')"
         if [[ -n "$SUGGEST_MSG" ]]; then
             echo ""
             echo "[LLM Review] 建议 commit:"
             echo ""
-            echo "        $SUGGEST_MSG"
+            # 按行显示，每行前加 8 个空格缩进，方便用户复制
+            echo "$SUGGEST_MSG" | while IFS= read -r line; do
+                if [[ -n "$line" ]]; then
+                    echo "        $line"
+                else
+                    echo ""
+                fi
+            done
             echo ""
         fi
     fi
