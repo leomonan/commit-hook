@@ -2,7 +2,7 @@
 # 文件名: commit-msg
 # 描述: commit message 格式校验钩子
 # 创建日期: 2026年01月25日 15:32:00
-# 最后更新日期: 2026年02月07日 01:26:14
+# 最后更新日期: 2026年02月07日 01:32:32
 
 set -e
 
@@ -125,15 +125,6 @@ if ! echo "$COMMIT_MSG" | grep -qE "$COMMIT_MSG_PATTERN"; then
             echo ""
             echo "[LLM Review] 建议 commit:"
             echo ""
-            # 按行显示，每行前加 8 个空格缩进，方便用户复制
-            echo "$SUGGEST_MSG" | while IFS= read -r line; do
-                if [[ -n "$line" ]]; then
-                    echo "        $line"
-                else
-                    echo ""
-                fi
-            done
-            echo ""
             # 生成可直接复制使用的命令（使用多个 -m 参数支持多行）
             FIRST_LINE=""
             REMAINING_LINES=""
@@ -153,18 +144,18 @@ if ! echo "$COMMIT_MSG" | grep -qE "$COMMIT_MSG_PATTERN"; then
                 fi
             done <<< "$SUGGEST_MSG"
             
+            # 始终显示可直接复制使用的命令（SSOT：单一事实来源）
+            echo -n "git commit -m \"$FIRST_LINE\""
             if [[ $LINE_COUNT -gt 1 ]]; then
-                # 多行：提供可直接复制使用的命令
-                echo -e "${YELLOW}可直接复制使用的命令：${NC}"
-                echo -n "git commit -m \"$FIRST_LINE\""
+                # 多行：添加额外的 -m 参数
                 while IFS= read -r line; do
                     if [[ -n "$line" ]]; then
                         echo -n " -m \"$line\""
                     fi
                 done <<< "$REMAINING_LINES"
-                echo ""
-                echo ""
             fi
+            echo ""
+            echo ""
         fi
     fi
     echo -e "${RED}提示：${NC}修复格式后重新提交，或使用 git commit --no-verify 跳过所有检查"

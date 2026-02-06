@@ -3,7 +3,7 @@
 文件名: check_header.py
 描述: 源码文件头检测模块（多语言）
 创建日期: 2026年01月25日 15:32:00
-最后更新日期: 2026年02月07日 00:40:00
+最后更新日期: 2026年02月07日 01:28:51
 """
 
 import os
@@ -267,6 +267,26 @@ def _get_current_datetime_str() -> str:
         if os.environ.get("DEBUG"):
             print(f"DEBUG: date cmd failed: {sys.exc_info()[1]}")
     return datetime.now().strftime("%Y年%m月%d日 %H:%M:%S")
+
+
+def _return_after_fix() -> int:
+    """修复完成后的统一返回逻辑（DRY）
+
+    如果是从主流程调用的（非交互模式），主流程会自动重新检查，静默返回。
+    否则（独立运行模式），打印提示信息后返回。
+
+    Returns:
+        0: 修复成功
+    """
+    if os.environ.get("COMMIT_HOOKS_HEADER_NO_INTERACTIVE"):
+        # 静默返回，主流程会显示重新检查的结果
+        return 0
+    else:
+        # 独立运行模式，提示用户
+        print(
+            f"{GREEN}[header-fix]{NC} 修复完成：建议重新运行 git diff / pre-commit 确认"
+        )
+        return 0
 
 
 def _update_last_updated_field(filepath: str, new_datetime: str) -> bool:
@@ -721,10 +741,7 @@ def main() -> int:
                             return 1
 
                         # 所有文件都已修复
-                        print(
-                            f"{GREEN}[header-fix]{NC} 修复完成：建议重新运行 git diff / pre-commit 确认"
-                        )
-                        return 0
+                        return _return_after_fix()
                     else:
                         # 用户选择不使用 LLM 修复
                         print(
@@ -742,10 +759,7 @@ def main() -> int:
             )
             return 1
 
-        print(
-            f"{GREEN}[header-fix]{NC} 修复完成：建议重新运行 git diff / pre-commit 确认"
-        )
-        return 0
+        return _return_after_fix()
 
     violations: list[tuple[str, list[str]]] = []
     new_file_violations: list[tuple[str, list[str]]] = []
@@ -892,6 +906,7 @@ def main() -> int:
 
         # 如果实际进行了任何修复，重新检查一次
         if (did_fix_last or did_fix_new) and not interactive_disabled:
+            print(f"{YELLOW}[pre-commit]{NC} 正在自动重新检查文件头...")
             env = dict(os.environ)
             env["COMMIT_HOOKS_HEADER_NO_INTERACTIVE"] = "1"
             recheck = subprocess.run(
