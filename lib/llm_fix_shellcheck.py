@@ -215,12 +215,12 @@ def _load_llm_provider_config() -> Dict[str, Any]:
         )
 
     data = tomllib.loads(cfg.read_text(encoding="utf-8"))
-    provider_name = (data.get("global", {}) or {}).get("review_provider")
+    provider_name = (data.get("global", {}) or {}).get("llm_provider")
     if not provider_name:
         raise ConfigurationError(
             f"LLM 配置缺失\n"
             f"请在 {cfg.name} 的 [global] 部分添加：\n"
-            '  review_provider = "anthropic"  # 或其他提供商名称'
+            '  llm_provider = "anthropic"  # 或其他提供商名称'
         )
     provider_cfg = data.get(provider_name, {}) or {}
     if not provider_cfg:
@@ -231,7 +231,15 @@ def _load_llm_provider_config() -> Dict[str, Any]:
         )
 
     api_type = provider_cfg.get("api_type", "openai")
+    
+    # Base URL: 优先从环境变量读取（如果配置了 base_url_env）
     base_url = provider_cfg.get("base_url")
+    base_url_env = provider_cfg.get("base_url_env")
+    if base_url_env:
+        env_url = os.getenv(base_url_env)
+        if env_url:
+            base_url = env_url
+
     model = provider_cfg.get("model")
     timeout = provider_cfg.get("timeout", 60)
     request_timeout = min(timeout, REQUEST_TIMEOUT_CAP)
@@ -332,11 +340,37 @@ async def _async_call_llm(prompt: str, cfg: Dict[str, Any]) -> str:
         }
 
     async with httpx.AsyncClient(timeout=timeout) as client:
-        resp = await asyncio.wait_for(
-            client.post(api_url, headers=headers, json=body),
-            timeout=request_timeout,
-        )
-        resp.raise_for_status()
+        max_retries = 3
+        base_delay = 1
+        for attempt in range(max_retries):
+            try:
+                resp = await asyncio.wait_for(
+                    client.post(api_url, headers=headers, json=body),
+                    timeout=request_timeout,
+                )
+                resp.raise_for_status()
+                break
+            except httpx.HTTPStatusError as e:
+                # 429 或 5xx 重试
+                if e.response.status_code == 429 or e.response.status_code >= 500:
+                    if attempt < max_retries - 1:
+                        print(f"{YELLOW}[llm-fix] HTTP {e.response.status_code}，正在重试 ({attempt + 1}/{max_retries})...{NC}")
+                        delay = base_delay * (2 ** attempt)
+                        await asyncio.sleep(delay)
+                        continue
+                
+                # 最小惊讶原则：LLM 调用失败时无条件打印错误
+                print(f"{RED}[llm-fix] HTTP 错误: {e.response.status_code}{NC}")
+                print(f"响应内容: {e.response.text}")
+                raise
+            except httpx.ConnectError:
+                if attempt < max_retries - 1:
+                    print(f"{YELLOW}[llm-fix] 连接错误，正在重试 ({attempt + 1}/{max_retries})...{NC}")
+                    delay = base_delay * (2 ** attempt)
+                    await asyncio.sleep(delay)
+                    continue
+                raise
+
         result = resp.json()
         text = _extract_text_content(result)
         if not text:

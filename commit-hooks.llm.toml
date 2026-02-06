@@ -9,10 +9,8 @@
 # 2) 否则：读取本文件（钩子目录内的 commit-hooks.llm.toml）
 
 [global]
-# header-fix 使用（必填：若想启用 LLM 修复）
-llm_provider = "deepseek"
-# commit-msg LLM Review 使用（可选：若想启用 LLM Review；可与 llm_provider 相同）
-review_provider = "deepseek"
+# 统一 LLM 提供商配置 (SSOT)
+llm_provider = "anthropic"
 
 # ---------------------------
 # OpenAI 兼容（OpenAI / DeepSeek / Doubao / 自建网关等）
@@ -46,6 +44,8 @@ api_key_env = "DEEPSEEK_API_KEY"
 [anthropic]
 api_type = "anthropic"
 base_url = "https://api.anthropic.com"
-model = "claude-4-5-sonnet-20250929"
-timeout = 60
-api_key_env = "ANTHROPIC_API_KEY"
+base_url_env = "ANTHROPIC_BASE_URL"
+# model = "claude-4-5-sonnet-20250929"
+model = "claude-opus-4-5-20251101"
+timeout = 600
+api_key_env = "ANTHROPIC_AUTH_TOKEN"

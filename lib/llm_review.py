@@ -24,7 +24,7 @@ YELLOW = "\033[1;33m"
 NC = "\033[0m"
 
 # 请求超时上限（秒），避免配置过大；实际使用 min(provider.timeout, REQUEST_TIMEOUT_CAP)
-REQUEST_TIMEOUT_CAP = 180
+REQUEST_TIMEOUT_CAP = 600
 
 # 缓存最大条目数（LRU 策略：超过此数量时删除最旧的条目）
 CACHE_MAX_SIZE = 100
@@ -543,9 +543,9 @@ def _build_prompt(diff: str) -> str:
    - 正确：KISS 原则，最简方案优先
 
 6. **产品长期化**
-   - 违反：代码注释中明确写有 TODO/FIXME 字样、"先这样后面再改"等临时方案标记
-   - 正确：一次性卓越，不留技术债
-   - 注意：只报告代码注释中字面包含 TODO/FIXME 的情况，不要推断
+   - 违反：设计上缺乏必要的扩展性、硬编码了本应动态配置的逻辑、模块间耦合度过高难以维护。
+   - 正确：架构设计考虑未来演进，模块边界清晰。
+   - 注意：不要仅仅因为代码中有 TODO/FIXME 就报错，这通常是正常的开发标记；重点关注架构设计层面的短视。
 
 7. **重复代码**
    - 违反：明显可以复用但复制粘贴的逻辑（相似度极高的代码块）
@@ -624,6 +624,7 @@ async def _async_llm_review(diff: str) -> Optional[dict]:
     使用简化的实现，直接调用 httpx 而不依赖完整的 LLM 客户端
     遵循 SSOT 原则：review_provider 是 LLM Review 模型配置的唯一来源
     """
+    content = None  # 用于在异常处理中访问
     try:
         # 1. 构造 prompt（仅依赖 diff），用于缓存 key 与 API 请求
         prompt = _build_prompt(diff)
@@ -668,14 +669,14 @@ async def _async_llm_review(diff: str) -> Optional[dict]:
         with open(llm_config_path, "rb") as f:
             config = tomllib.load(f)
 
-        # 读取 LLM Review 专用提供商（必需配置，遵循 SSOT 原则）
-        provider_name = config.get("global", {}).get("review_provider")
+        # 读取统一 LLM 提供商（遵循 SSOT 原则）
+        provider_name = config.get("global", {}).get("llm_provider")
 
         if not provider_name:
             raise ConfigurationError(
-                "LLM Review 配置缺失\n"
+                "LLM 配置缺失\n"
                 f"请在 {llm_config_path.name} 的 [global] 部分添加：\n"
-                '  review_provider = "anthropic"  # 或其他提供商名称'
+                '  llm_provider = "anthropic"  # 或其他提供商名称'
             )
 
         provider_config = config.get(provider_name, {})
@@ -689,7 +690,15 @@ async def _async_llm_review(diff: str) -> Optional[dict]:
 
         # 获取配置
         api_type = provider_config.get("api_type", "openai")
+        
+        # Base URL: 优先从环境变量读取（如果配置了 base_url_env）
         base_url = provider_config.get("base_url")
+        base_url_env = provider_config.get("base_url_env")
+        if base_url_env:
+            env_url = os.getenv(base_url_env)
+            if env_url:
+                base_url = env_url
+
         model = provider_config.get("model")
         timeout = provider_config.get("timeout", 60)
         request_timeout = min(timeout, REQUEST_TIMEOUT_CAP)
@@ -741,17 +750,40 @@ async def _async_llm_review(diff: str) -> Optional[dict]:
             request_body = {
                 "model": model,
                 "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": 2000,
+                # Anthropic API 必须设置 max_tokens，设置一个很大的值以避免截断
+                # 注意：Anthropic API 的最大值通常是 8192 或更高（取决于模型）
+                "max_tokens": 16000,  # 设置足够大的值，避免 JSON 响应被截断
                 "temperature": 0.3,
             }
 
             # 发送请求
             async with httpx.AsyncClient(timeout=timeout) as client:
-                response = await asyncio.wait_for(
-                    client.post(api_url, headers=headers, json=request_body),
-                    timeout=request_timeout,
-                )
-                response.raise_for_status()
+                max_retries = 3
+                base_delay = 1
+                for attempt in range(max_retries):
+                    try:
+                        response = await asyncio.wait_for(
+                            client.post(api_url, headers=headers, json=request_body),
+                            timeout=request_timeout,
+                        )
+                        response.raise_for_status()
+                        break
+                    except httpx.HTTPStatusError as e:
+                        # 429 或 5xx 重试
+                        if e.response.status_code == 429 or e.response.status_code >= 500:
+                            if attempt < max_retries - 1:
+                                print(f"{YELLOW}[LLM Review] HTTP {e.response.status_code}，正在重试 ({attempt + 1}/{max_retries})...{NC}")
+                                delay = base_delay * (2 ** attempt)
+                                await asyncio.sleep(delay)
+                                continue
+                        raise
+                    except httpx.ConnectError:
+                        if attempt < max_retries - 1:
+                            print(f"{YELLOW}[LLM Review] 连接错误，正在重试 ({attempt + 1}/{max_retries})...{NC}")
+                            delay = base_delay * (2 ** attempt)
+                            await asyncio.sleep(delay)
+                            continue
+                        raise
 
                 result = response.json()
         else:
@@ -766,16 +798,39 @@ async def _async_llm_review(diff: str) -> Optional[dict]:
                 "model": model,
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.3,
-                "max_tokens": 2000,
+                # OpenAI 兼容 API 可以不设置 max_tokens，会使用模型的最大值
+                # 这样可以根据不同模型自动适配，避免人为限制导致截断
+                # 如果 API 不支持，会自动使用模型默认的最大值（通常是 4096-8192）
             }
 
             # 发送请求
             async with httpx.AsyncClient(timeout=timeout) as client:
-                response = await asyncio.wait_for(
-                    client.post(api_url, headers=headers, json=request_body),
-                    timeout=request_timeout,
-                )
-                response.raise_for_status()
+                max_retries = 3
+                base_delay = 1
+                for attempt in range(max_retries):
+                    try:
+                        response = await asyncio.wait_for(
+                            client.post(api_url, headers=headers, json=request_body),
+                            timeout=request_timeout,
+                        )
+                        response.raise_for_status()
+                        break
+                    except httpx.HTTPStatusError as e:
+                        # 429 或 5xx 重试
+                        if e.response.status_code == 429 or e.response.status_code >= 500:
+                            if attempt < max_retries - 1:
+                                print(f"{YELLOW}[LLM Review] HTTP {e.response.status_code}，正在重试 ({attempt + 1}/{max_retries})...{NC}")
+                                delay = base_delay * (2 ** attempt)
+                                await asyncio.sleep(delay)
+                                continue
+                        raise
+                    except httpx.ConnectError:
+                        if attempt < max_retries - 1:
+                            print(f"{YELLOW}[LLM Review] 连接错误，正在重试 ({attempt + 1}/{max_retries})...{NC}")
+                            delay = base_delay * (2 ** attempt)
+                            await asyncio.sleep(delay)
+                            continue
+                        raise
 
                 result = response.json()
 
@@ -819,6 +874,17 @@ async def _async_llm_review(diff: str) -> Optional[dict]:
                     json_lines.append(line)
             content = "\n".join(json_lines).strip()
 
+        # 如果启用了打印提示词，也打印 LLM 返回的原始内容
+        if os.environ.get("COMMIT_HOOKS_LLM_REVIEW_PRINT_PROMPT", "").lower() in (
+            "1",
+            "true",
+            "yes",
+        ):
+            print(f"{YELLOW}[LLM Review] LLM 返回的原始内容：{NC}")
+            print("---")
+            print(content)
+            print("---")
+
         # 解析 JSON 并写入缓存
         parsed = json.loads(content)
         c = _load_cache()
@@ -832,6 +898,17 @@ async def _async_llm_review(diff: str) -> Optional[dict]:
     except asyncio.TimeoutError:
         raise NetworkError(f"LLM Review 超时（{request_timeout}秒）")
     except json.JSONDecodeError as e:
+        # 如果启用了打印提示词，打印原始内容以便调试
+        if os.environ.get("COMMIT_HOOKS_LLM_REVIEW_PRINT_PROMPT", "").lower() in (
+            "1",
+            "true",
+            "yes",
+        ):
+            if content is not None:
+                print(f"{RED}[LLM Review] JSON 解析失败，原始内容：{NC}")
+                print("---")
+                print(content)
+                print("---")
         raise NetworkError(f"LLM 返回的 JSON 格式错误: {e}")
     except httpx.HTTPStatusError as e:
         body = ""
@@ -849,12 +926,19 @@ async def _async_llm_review(diff: str) -> Optional[dict]:
         if not body:
             body = "（无返回内容）"
         else:
-            body = body[:2000] + ("..." if len(body) > 2000 else "")
+            # 错误信息不截断，确保用户能看到完整原因（如余额不足、权限错误等）
+            pass
+            
         url_info = ""
         try:
             url_info = f"\n请求 URL: {e.request.url}"
         except Exception:
             url_info = ""
+            
+        # 最小惊讶原则：直接打印完整错误信息
+        print(f"{RED}[LLM Review] HTTP 错误: {e.response.status_code}{NC}")
+        print(f"响应内容: {body}")
+        
         raise NetworkError(
             f"HTTP 错误: {e.response.status_code}{url_info}\n返回内容:\n{body}"
         )

@@ -376,7 +376,15 @@ def _load_llm_provider_config() -> dict:
         )
 
     api_type = provider_cfg.get("api_type", "openai")
+    
+    # Base URL: 优先从环境变量读取（如果配置了 base_url_env）
     base_url = provider_cfg.get("base_url")
+    base_url_env = provider_cfg.get("base_url_env")
+    if base_url_env:
+        env_url = os.getenv(base_url_env)
+        if env_url:
+            base_url = env_url
+
     model = provider_cfg.get("model")
     timeout = provider_cfg.get("timeout", 60)
 
@@ -557,8 +565,36 @@ async def _async_llm_fix_last_updated(filepath: str, cfg: dict) -> bool:
             }
 
         async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.post(api_url, headers=headers, json=body)
-            resp.raise_for_status()
+            max_retries = 3
+            base_delay = 1
+            for attempt in range(max_retries):
+                try:
+                    resp = await client.post(api_url, headers=headers, json=body)
+                    resp.raise_for_status()
+                    break
+                except httpx.HTTPStatusError as e:
+                    # 如果是 429 (Too Many Requests) 或 5xx (Server Error)，则尝试重试
+                    if e.response.status_code == 429 or e.response.status_code >= 500:
+                        if attempt < max_retries - 1:
+                            # 最小惊讶原则：打印重试信息以便用户知道发生了什么
+                            print(f"{YELLOW}[header-fix] HTTP {e.response.status_code}，正在重试 ({attempt + 1}/{max_retries})...{NC}")
+                            delay = base_delay * (2 ** attempt)  # 指数退避
+                            await asyncio.sleep(delay)
+                            continue
+                    
+                    # 其他错误或重试耗尽：打印完整错误信息并抛出
+                    print(f"{RED}[header-fix] HTTP 错误: {e.response.status_code}{NC}")
+                    print(f"响应内容: {e.response.text}")
+                    raise
+                except httpx.ConnectError:
+                    # 连接错误也尝试重试
+                    if attempt < max_retries - 1:
+                        print(f"{YELLOW}[header-fix] 连接错误，正在重试 ({attempt + 1}/{max_retries})...{NC}")
+                        delay = base_delay * (2 ** attempt)
+                        await asyncio.sleep(delay)
+                        continue
+                    raise
+
             result = resp.json()
 
         # 打印原始响应（用于调试）
@@ -716,8 +752,11 @@ async def _async_llm_fix_last_updated(filepath: str, cfg: dict) -> bool:
                         print(f"DEBUG: failed to unlink patch: {e}")
 
     except Exception as e:
-        if os.environ.get("DEBUG"):
-            print(f"DEBUG: exception in header check: {e}")
+        if os.environ.get("DEBUG") or os.environ.get("COMMIT_HOOKS_LLM_REVIEW_PRINT_PROMPT"):
+            print(f"{RED}[header-fix] 异常详情：{NC}")
+            print(f"{e}")
+            import traceback
+            traceback.print_exc()
         return False
 
 
