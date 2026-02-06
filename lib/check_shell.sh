@@ -2,7 +2,7 @@
 # 文件名: check_shell.sh
 # 描述: Shell 脚本检查（shellcheck）
 # 创建日期: 2026年01月26日 14:42:11
-# 最后更新日期: 2026年02月05日 10:28:44
+# 最后更新日期: 2026年02月07日 01:56:59
 
 check_shell_scripts() {
     RED='\033[0;31m'
@@ -108,28 +108,37 @@ if [[ $found_errors -eq 1 ]]; then
     local FIX_TOOL="${SCRIPT_DIR}/llm_fix_shellcheck.py"
     
     if [[ -f "$FIX_TOOL" ]]; then
-        # 检测是否在交互式终端中
-        if [[ -t 0 ]]; then
+        # 尝试交互式询问
+        # 在 git commit 时，stdin 可能被重定向，但我们可以从 /dev/tty 读取
+        # 检查 stdout 或 stderr 是否连接到终端（更可靠的检测方式）
+        if [[ -t 1 ]] || [[ -t 2 ]]; then
             echo -e "${YELLOW}可选：${NC}检测到 LLM 修复工具，是否尝试自动修复本次 shellcheck 报错？(仅修复报错，不改其他逻辑)"
             echo -n "运行 LLM 修复? [y/N] "
-            read -r response < /dev/tty 2>/dev/null || response="n"
-            case "$(echo "$response" | tr 'A-Z' 'a-z')" in
-                y|yes)
-                    echo -e "${GREEN}[pre-commit]${NC} 正在运行 LLM 修复工具..."
-                    local PY_CMD="${PYTHON_CMD:-python3}"
-                    if "$PY_CMD" "$FIX_TOOL" --files "${error_files[@]}"; then
-                        echo -e "${GREEN}[pre-commit]${NC} 修复成功！请检查更改并重新提交（git add ... && git commit ...）"
-                        # 修复后仍返回 1 阻断本次提交，让用户确认变更
-                        return 1
-                    else
-                        echo -e "${RED}[pre-commit]${NC} LLM 修复失败或未完全修复"
-                    fi
-                    ;;
-                *)
-                    echo "  已跳过自动修复。手动运行命令: ${PYTHON_CMD:-python3} $FIX_TOOL"
-                    ;;
-            esac
+            # 尝试从 /dev/tty 读取（即使 stdin 被重定向也能工作）
+            if read -r response < /dev/tty 2>/dev/null; then
+                case "$(echo "$response" | tr '[:upper:]' '[:lower:]')" in
+                    y|yes)
+                        echo -e "${GREEN}[pre-commit]${NC} 正在运行 LLM 修复工具..."
+                        local PY_CMD="${PYTHON_CMD:-python3}"
+                        if "$PY_CMD" "$FIX_TOOL" --files "${error_files[@]}"; then
+                            echo -e "${GREEN}[pre-commit]${NC} 修复成功！请检查更改并重新提交（git add ... && git commit ...）"
+                            # 修复后仍返回 1 阻断本次提交，让用户确认变更
+                            return 1
+                        else
+                            echo -e "${RED}[pre-commit]${NC} LLM 修复失败或未完全修复"
+                        fi
+                        ;;
+                    *)
+                        echo "  已跳过自动修复。手动运行命令: ${PYTHON_CMD:-python3} $FIX_TOOL"
+                        ;;
+                esac
+            else
+                # 读取失败（非交互式环境），显示提示信息
+                echo -e "${YELLOW}提示：${NC}可运行以下命令尝试自动修复:"
+                echo "  ${PYTHON_CMD:-python3} $FIX_TOOL"
+            fi
         else
+            # 非交互式环境，显示提示信息
             echo -e "${YELLOW}提示：${NC}可运行以下命令尝试自动修复:"
             echo "  ${PYTHON_CMD:-python3} $FIX_TOOL"
         fi
