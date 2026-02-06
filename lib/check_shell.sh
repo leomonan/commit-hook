@@ -2,7 +2,7 @@
 # 文件名: check_shell.sh
 # 描述: Shell 脚本检查（shellcheck）
 # 创建日期: 2026年01月26日 14:42:11
-# 最后更新日期: 2026年02月07日 01:56:59
+# 最后更新日期: 2026年02月07日 02:22:36
 
 check_shell_scripts() {
     RED='\033[0;31m'
@@ -121,9 +121,23 @@ if [[ $found_errors -eq 1 ]]; then
                         echo -e "${GREEN}[pre-commit]${NC} 正在运行 LLM 修复工具..."
                         local PY_CMD="${PYTHON_CMD:-python3}"
                         if "$PY_CMD" "$FIX_TOOL" --files "${error_files[@]}"; then
-                            echo -e "${GREEN}[pre-commit]${NC} 修复成功！请检查更改并重新提交（git add ... && git commit ...）"
-                            # 修复后仍返回 1 阻断本次提交，让用户确认变更
-                            return 1
+                            echo -e "${GREEN}[pre-commit]${NC} 修复成功！重新检查 shellcheck..."
+                            # 修复后重新检查 shellcheck，确保修复成功
+                            local still_has_errors=0
+                            for file in "${error_files[@]}"; do
+                                if ! shellcheck "$file" > /dev/null 2>&1; then
+                                    still_has_errors=1
+                                    break
+                                fi
+                            done
+                            if [[ $still_has_errors -eq 0 ]]; then
+                                echo -e "${GREEN}[pre-commit]${NC} shellcheck 检查通过，继续提交流程"
+                                # 修复成功且检查通过，返回 0 继续提交
+                                return 0
+                            else
+                                echo -e "${YELLOW}[pre-commit]${NC} 修复后仍有问题，请手动检查"
+                                return 1
+                            fi
                         else
                             echo -e "${RED}[pre-commit]${NC} LLM 修复失败或未完全修复"
                         fi

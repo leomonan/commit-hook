@@ -3,7 +3,7 @@
 文件名: llm_review.py
 描述: LLM 辅助代码审查模块
 创建日期: 2026年01月25日 15:32:00
-最后更新日期: 2026年02月07日 01:22:20
+最后更新日期: 2026年02月07日 02:22:36
 """
 
 import hashlib
@@ -623,6 +623,14 @@ def _do_llm_review(diff: str) -> Optional[dict]:
             f"{YELLOW}[LLM Review]{NC} 分析中... 检视模型: {cfg['provider_name']} / {cfg['model']}"
         )
 
+        # 根据提供商设置合适的 max_tokens（避免超出 API 限制）
+        provider_name = cfg.get("provider_name", "").lower()
+        if provider_name == "anthropic":
+            max_tokens = 16000  # Anthropic 支持更大的值
+        else:
+            # DeepSeek 和其他 OpenAI 兼容 API 的最大值通常是 8192
+            max_tokens = 8192
+
         # 调试：打印完整提示词
         if os.environ.get("COMMIT_HOOKS_LLM_REVIEW_PRINT_PROMPT", "").lower() in (
             "1",
@@ -638,7 +646,7 @@ def _do_llm_review(diff: str) -> Optional[dict]:
         content_text = call_llm(
             prompt,
             cfg,
-            max_tokens=16000,
+            max_tokens=max_tokens,
             temperature=0.3,
             log_prefix="LLM Review",
         )
