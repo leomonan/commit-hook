@@ -3,7 +3,7 @@
 文件名: llm_client.py
 描述: commit-hook 系列脚本的统一 LLM 配置加载与 API 调用公共模块（SSOT）
 创建日期: 2026年02月07日 00:40:00
-最后更新日期: 2026年02月07日 00:40:00
+最后更新日期: 2026年02月07日 10:56:20
 """
 
 from __future__ import annotations
@@ -15,7 +15,6 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-
 
 # ── 终端颜色常量 ──────────────────────────────────────────────
 
@@ -173,11 +172,15 @@ def load_llm_config(*, request_timeout_cap: Optional[int] = None) -> Dict[str, A
         )
 
     data = tomllib.loads(cfg_path.read_text(encoding="utf-8"))
-    provider_name = (data.get("global", {}) or {}).get("llm_provider")
+    # 优先从环境变量读取 llm_provider（SSOT）
+    provider_name = os.getenv("COMMIT_HOOKS_LLM_PROVIDER")
+    if not provider_name:
+        # 向后兼容：从 toml 文件读取
+        provider_name = (data.get("global", {}) or {}).get("llm_provider")
     if not provider_name:
         raise ConfigurationError(
             f"LLM 配置缺失\n"
-            f"请在 {cfg_path.name} 的 [global] 部分添加：\n"
+            f"请设置环境变量 COMMIT_HOOKS_LLM_PROVIDER，或在 {cfg_path.name} 的 [global] 部分添加：\n"
             '  llm_provider = "anthropic"  # 或其他提供商名称'
         )
 

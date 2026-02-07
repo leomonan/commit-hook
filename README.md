@@ -4,7 +4,7 @@
 文件名: README.md
 描述: 独立 Git 提交钩子项目说明与安装配置
 创建日期: 2026年02月04日 17:24:37
-最后更新日期: 2026年02月05日星期四 10:20:10
+最后更新日期: 2026年02月07日 10:56:20
 -->
 
 ## 概述
@@ -61,15 +61,18 @@ LLM 审查/修复使用独立配置文件，支持：
 2. **约定路径**：钩子目录（即 `install.sh` 所在目录）下 `commit-hooks.llm.toml`。
 
 配置文件需包含：
-- `[global] llm_provider = "xxx"`（供 header-fix）
 - `[global] review_provider = "xxx"`（供 LLM Review，可与 llm_provider 相同）
 以及对应 `[xxx]` 节（base_url、model、api_key 或 api_key_env、timeout 等）。本仓库已提供模板：`commit-hooks/commit-hooks.llm.toml`。
+
+**LLM Provider 配置**：`llm_provider` 已迁移到 `.env` 文件中的 `COMMIT_HOOKS_LLM_PROVIDER` 环境变量（SSOT）。优先从环境变量读取，如果没有则从 toml 文件读取（向后兼容）。
 
 **API Key 存放**：钩子目录下提供 `.env.example` 模板；复制为 `.env` 后填写对应 KEY（`.env` 已被忽略，勿提交）。提交前需让环境变量生效，例如：
 
 ```bash
 cp commit-hooks/.env.example commit-hooks/.env
-# 编辑 commit-hooks/.env 填入 OPENAI_API_KEY / DEEPSEEK_API_KEY / ANTHROPIC_API_KEY 等
+# 编辑 commit-hooks/.env 填入：
+#   - COMMIT_HOOKS_LLM_PROVIDER="deepseek"  # 可选值: openai, deepseek, anthropic
+#   - OPENAI_API_KEY / DEEPSEEK_API_KEY / ANTHROPIC_API_KEY 等
 source commit-hooks/.env   # 或：export $(grep -v '^#' commit-hooks/.env | xargs)
 git commit -m "..."
 ```

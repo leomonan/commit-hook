@@ -10,7 +10,8 @@
 
 [global]
 # 统一 LLM 提供商配置 (SSOT)
-llm_provider = "anthropic"
+# 注意：llm_provider 已迁移到 .env 文件中的 COMMIT_HOOKS_LLM_PROVIDER 环境变量
+# 保留此配置仅用于向后兼容，优先使用环境变量
 
 # ---------------------------
 # OpenAI 兼容（OpenAI / DeepSeek / Doubao / 自建网关等）
