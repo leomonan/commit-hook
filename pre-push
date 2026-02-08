@@ -1,0 +1,52 @@
+#!/bin/bash
+# 文件名: pre-push
+# 描述: 通用的 pre-push hook 接口，自动扫描并执行项目特定的 hooks
+# 注意: 此文件是通用接口，项目特定的 hooks 应放在 project-hooks/ 目录下
+# 创建日期: 2026年02月09日 02:57:00
+# 最后更新日期: 2026年02月09日 02:57:00
+
+# 获取 Git 仓库根目录
+GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+if [ -z "$GIT_ROOT" ]; then
+    # 如果无法获取仓库根目录，直接通过
+    exit 0
+fi
+
+# 项目特定的 hooks 目录
+# 支持两种位置：
+# 1. commit-hook/project-hooks/（如果 core.hooksPath 指向 commit-hook）
+# 2. 仓库根目录下的 project-hooks/（备用位置）
+HOOKS_DIR=""
+if [ -d "$GIT_ROOT/commit-hook/project-hooks" ]; then
+    HOOKS_DIR="$GIT_ROOT/commit-hook/project-hooks"
+elif [ -d "$GIT_ROOT/project-hooks" ]; then
+    HOOKS_DIR="$GIT_ROOT/project-hooks"
+fi
+
+# 如果没有找到项目特定的 hooks 目录，直接通过
+if [ -z "$HOOKS_DIR" ] || [ ! -d "$HOOKS_DIR" ]; then
+    exit 0
+fi
+
+# 扫描并执行所有可执行的 pre-push hooks
+# 按文件名排序，确保执行顺序一致
+HOOKS_FOUND=false
+for hook in "$HOOKS_DIR"/pre-push*; do
+    # 检查文件是否存在且可执行
+    if [ -f "$hook" ] && [ -x "$hook" ]; then
+        HOOKS_FOUND=true
+        # 执行 hook，传递所有参数
+        if ! "$hook" "$@"; then
+            # 如果 hook 返回非零退出码，阻止 push
+            exit 1
+        fi
+    fi
+done
+
+# 如果没有找到任何 hook，直接通过
+if [ "$HOOKS_FOUND" = false ]; then
+    exit 0
+fi
+
+# 所有 hooks 都成功执行
+exit 0

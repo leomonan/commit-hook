@@ -16,5 +16,6 @@ __pycache__/
 *.patch
 *.log
 
-# 项目特定的 hooks（包装脚本，不应提交到公共仓库）
-hooks/pre-push
+# 项目特定的 hooks（不应提交到公共仓库）
+project-hooks/
+hooks/
