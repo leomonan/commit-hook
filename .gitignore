@@ -15,3 +15,6 @@ __pycache__/
 # 调试/临时
 *.patch
 *.log
+
+# 项目特定的 hooks（包装脚本，不应提交到公共仓库）
+hooks/pre-push
