@@ -3,7 +3,7 @@
 文件名: llm_client.py
 描述: commit-hook 系列脚本的统一 LLM 配置加载与 API 调用公共模块（SSOT）
 创建日期: 2026年02月07日 00:40:00
-最后更新日期: 2026年02月07日 10:56:20
+最后更新日期: 2026年02月11日 14:23:17
 """
 
 from __future__ import annotations
@@ -135,6 +135,35 @@ def extract_text_content(result: Dict[str, Any]) -> str:
 # ── LLM 配置加载（SSOT） ────────────────────────────────────
 
 
+def _load_hooks_env() -> None:
+    """加载钩子目录下的 .env，使直接运行 Python 脚本时也能读到 COMMIT_HOOKS_* 等变量。
+
+    pre-commit/commit-msg 等 Shell 钩子会 source .env，但单独运行 llm_fix_shellcheck.py 时
+    不会经过钩子，环境变量未被加载。此处仅 setdefault，不覆盖已有环境变量，与 Shell 行为一致。
+    """
+    env_file = hooks_root() / ".env"
+    if not env_file.exists():
+        return
+    for raw in env_file.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export ") :].strip()
+        if "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        key = k.strip()
+        val = v.strip()
+        if (val.startswith('"') and val.endswith('"')) or (
+            val.startswith("'") and val.endswith("'")
+        ):
+            val = val[1:-1]
+        if not key:
+            continue
+        os.environ.setdefault(key, val)
+
+
 def load_llm_config(*, request_timeout_cap: Optional[int] = None) -> Dict[str, Any]:
     """统一加载 commit-hooks LLM 配置（SSOT）
 
@@ -155,6 +184,7 @@ def load_llm_config(*, request_timeout_cap: Optional[int] = None) -> Dict[str, A
     except ImportError as e:
         raise ConfigurationError(f"tomllib 不可用（需要 Python 3.11+）: {e}")
 
+    _load_hooks_env()
     hooks_dir = hooks_root()
     cfg_env = os.environ.get("COMMIT_HOOKS_LLM_CONFIG")
     if cfg_env:
