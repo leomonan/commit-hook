@@ -2,7 +2,7 @@
 # 文件名: pre-commit
 # 描述: pre-commit 钩子 - 代码提交前检查
 # 创建日期: 2026年01月25日 15:32:00
-# 最后更新日期: 2026年02月04日 23:29:27
+# 最后更新日期: 2026年02月11日 09:15:00
 
 set -e
 
@@ -138,6 +138,14 @@ if ask_continue "禁止静默吞异常检测"; then
         echo -e "${YELLOW}[pre-commit]${NC} 无暂存 Python 文件，跳过: 禁止静默吞异常检测"
     else
         ${PYTHON_CMD} "${SCRIPT_DIR}/lib/check_no_silent_excepts.py" --staged --files "${STAGED_PY_FILES[@]}" || { print_hooks_help_hint; exit 1; }
+    fi
+fi
+
+# 7. 项目扩展：若仓库内存在 scripts/commit-hooks/pre_commit_extra.sh 则执行（不放入 commit-hooks 子仓库）
+if [[ -f "${GIT_ROOT}/scripts/commit-hooks/pre_commit_extra.sh" ]]; then
+    if ask_continue "项目扩展检查 (scripts/commit-hooks/pre_commit_extra.sh)"; then
+        # shellcheck source=/dev/null
+        . "${GIT_ROOT}/scripts/commit-hooks/pre_commit_extra.sh" || { print_hooks_help_hint; exit 1; }
     fi
 fi
 

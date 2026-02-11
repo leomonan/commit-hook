@@ -4,7 +4,7 @@
 文件名: README.md
 描述: 独立 Git 提交钩子项目说明与安装配置
 创建日期: 2026年02月04日 17:24:37
-最后更新日期: 2026年02月07日 10:56:20
+最后更新日期: 2026年02月11日 09:22:08
 -->
 
 ## 概述
@@ -133,3 +133,11 @@ commit-hooks/
 - **子模块**：`git submodule add <url> commit-hooks`，克隆后执行 `bash commit-hooks/install.sh`。
 
 本钩子不依赖项目名或路径，仅依赖仓库根与 `config.sh` / 可选 LLM 配置。
+
+### 项目扩展（可选）
+
+各使用仓库可在**本仓库内**（非 commit-hooks 子仓库）增加专属检查，由 pre-commit 自动调用：
+
+- **约定路径**：`scripts/commit-hooks/pre_commit_extra.sh`（相对于仓库根）。
+- **行为**：若该文件存在，pre-commit 在通过上述通用检查后会 `source` 执行；脚本内可使用已注入的 `GIT_ROOT`、`PYTHON_CMD`、`print_hooks_help_hint` 等；非零退出会阻断提交。
+- **用途**：例如原语 metadata 与 summary 同步校验、项目特定 lint 等，脚本与逻辑保留在使用方仓库，不提交到 commit-hooks 开源库。
