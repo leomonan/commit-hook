@@ -2,7 +2,7 @@
 # 文件名: pre-commit
 # 描述: pre-commit 钩子 - 代码提交前检查
 # 创建日期: 2026年01月25日 15:32:00
-# 最后更新日期: 2026年02月11日 09:28:00
+# 最后更新日期: 2026年02月11日 12:03:41
 
 set -e
 
@@ -29,10 +29,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-# 打印 hook 参数帮助提示
-print_hooks_help_hint() {
-    echo -e "${YELLOW}提示：${NC}COMMIT_HOOKS_HELP=1 git commit 可查看所有 hook 参数用法"
-}
+source "${SCRIPT_DIR}/lib/hooks_help.sh"
 
 # 打印 hook 参数帮助后退出（不执行检查、不提交）
 case "$(echo "${COMMIT_HOOKS_HELP:-}" | tr 'A-Z' 'a-z')" in
